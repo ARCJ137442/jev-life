@@ -23,6 +23,7 @@
  *    会继续往下走。这是那种「不报错、只是结论不同」的错，最该防。
  */
 import { boardFromRows, toRows } from "../core/life.js";
+import type { RuleTemplates } from "../core/template.js";
 import type { GameRules, Mode, Topology } from "../core/types.js";
 import type { TurnRecord } from "../shared/types.js";
 import type { Role } from "../core/types.js";
@@ -79,6 +80,14 @@ export interface RoleLog {
   readonly costUsd: number | null;
   readonly request: unknown;
   readonly response: unknown;
+  /**
+   * 这一手用的规则说明书模板（六份**原文**）。
+   *
+   * 渲染后的文字已经在 `request.state.rules` 里，这里存的是它的**输入** ——
+   * 改了模板之后要对照的是「当时用的是哪一版措辞」，只看渲染结果没法把模板
+   * 改回去重放。可选：老存档里没有这一栏。
+   */
+  readonly contextSnapshot?: RuleTemplates;
   /** 非空表示这一次调用失败了；此时 cell 为 null */
   readonly error?: string;
 }
@@ -301,13 +310,17 @@ export function saveSessionNow(s: SessionInput): void {
   } catch {
     // 配额满：把日志的**负载**丢掉再试一次。棋盘与回合数是这一局的本体，
     // 日志只是过程记录 —— 两害相权，丢日志。
+    //
+    // `contextSnapshot`（六份模板原文）与 `request` 同属负载那一档：它是
+    // 逐条日志里体积最大的一块，而「这一局怎么下的」不靠它。留 `request`
+    // 那条口径 —— 全都丢，而不是丢一半。
     try {
       const lean = {
         ...payload,
         logs: payload.logs.map((row) => ({
           ...row,
-          life: row.life ? { ...row.life, request: null, response: null } : null,
-          death: row.death ? { ...row.death, request: null, response: null } : null,
+          life: row.life ? { ...row.life, request: null, response: null, contextSnapshot: undefined } : null,
+          death: row.death ? { ...row.death, request: null, response: null, contextSnapshot: undefined } : null,
         })),
       };
       localStorage.setItem(KEY, JSON.stringify(lean));

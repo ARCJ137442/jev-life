@@ -27,7 +27,10 @@ import {
   isPresetSize,
   presetFor,
   presetRulesFor,
+  templatesOf,
 } from "../client/config.js";
+import { DEFAULT_TEMPLATES } from "../core/template.js";
+import type { RuleTemplates } from "../core/template.js";
 import { clampEffort } from "../shared/llm-broker.js";
 import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
 import { PRESETS } from "../core/presets.js";
@@ -163,6 +166,29 @@ function llm(patch: {
 }) {
   return { ...defaultRole(), ...patch };
 }
+
+test("★ 模板：出厂值是出厂模板，脏数据逐项回落", () => {
+  // 出厂模板 = 这一层出现之前那段文案（`context.test.ts` 有一条逐字快照）
+  assert.deepEqual(defaultRole().templates, DEFAULT_TEMPLATES);
+
+  // `templatesOf` 是**用的时候**才调的那一层兜底：导入存档不经过 `readRole`
+  // （`archive.ts` 只做形状兜底），一个手改过的存档能把任意值塞进来
+  const dirty = {
+    horizon: 42,
+    win_condition: null,
+    objective: "只改这一项",
+  } as unknown as Partial<RuleTemplates>;
+  const out = templatesOf(dirty);
+
+  assert.equal(out.objective, "只改这一项", "认得出来的模板被丢掉了");
+  assert.equal(out.horizon, DEFAULT_TEMPLATES.horizon, "认不出的值没有回落 —— 渲染时它会被当成空模板");
+  assert.equal(out.win_condition, DEFAULT_TEMPLATES.win_condition);
+  // 缺字段与整个不是对象这两种情况也要能收
+  assert.deepEqual(templatesOf(undefined), DEFAULT_TEMPLATES);
+  assert.deepEqual(templatesOf("不是对象"), DEFAULT_TEMPLATES);
+  // 逐项回落而不是整块丢掉：只有一项脏时，其余各项必须原样保留
+  assert.equal(Object.keys(out).length, Object.keys(DEFAULT_TEMPLATES).length);
+});
 
 test("★ desiredEffort 的优先级：思维链关是一票否决", () => {
   // 出厂默认：思维链关 → 明确要 none（实测 3/3，且从结构上消灭了

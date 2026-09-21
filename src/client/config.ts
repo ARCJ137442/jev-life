@@ -21,6 +21,8 @@
  */
 import type { GameRules, Mode, Role, Topology } from "../core/types.js";
 import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
+import { DEFAULT_TEMPLATES, TEMPLATE_KEYS } from "../core/template.js";
+import type { RuleTemplates } from "../core/template.js";
 // 能力表（谁收哪些档位）住在 broker 里，界面**不另抄一份** —— 抄一份的话，
 // 往能力表里加一个上游时界面会照旧标注「不支持」。`clampEffort` 因此是
 // **运行期**依赖，不只是类型。
@@ -157,6 +159,17 @@ export interface RoleSettings {
   ruleNote: string;
   /** 策略提示 → aids.strategy_hint */
   strategyHint: string;
+  /**
+   * 规则说明书的模板（六项）→ `rules` 里对应那六项。
+   *
+   * 与 `ruleNote` 同级（玩家级）：`ruleNote` 是**补充**，这六份是**正文**。
+   * 正文之所以能被编辑，是因为模板把「措辞」与「数值」分开了 —— 措辞由这里
+   * 定，数值永远来自 `store.duel` 与当前局面（见 `core/template.ts` 文件头）。
+   *
+   * ⚠ 空串 = **用出厂措辞**（`renderTemplates` 里逐项回落），不是「这一项不要」。
+   * 六项里任意一项空了，发给模型的都是一条空规则 —— 那正是「对 Jev 说谎」。
+   */
+  templates: RuleTemplates;
 
   /* ══════════ LLM 调用配置（只在选用 LLM 后端时有消费者）══════════
    *
@@ -314,6 +327,8 @@ export function defaultRole(): RoleSettings {
     detectPatterns: true,
     ruleNote: "",
     strategyHint: "",
+    // 出厂模板 = 这一层存在之前那段文案（`context.test.ts` 有一条对拍用例）
+    templates: { ...DEFAULT_TEMPLATES },
     chainOfThought: false,
     allowThinking: "",
     effort: "",
@@ -502,6 +517,25 @@ function safeParse(raw: string | null): Record<string, unknown> | null {
   }
 }
 
+/**
+ * 把一份来路不明的模板读完。
+ *
+ * 两条入口的**信任级别不同**，所以这个函数必须在**用的时候**调，而不是只在
+ * `load()` 里调一次：`load()` 那条（localStorage）已经过 `readRole`，
+ * 但**导入存档那条不走它** —— `archive.ts` 的 `asRole` 只做形状兜底
+ * （`{ ...defaultRole(), ...raw }`），一个手改过的存档可以把任意值塞进模板，
+ * 然后它一路流到 `buildState` 去。这里逐项要求「是字符串」，其余回落出厂措辞。
+ */
+export function templatesOf(src: unknown): RuleTemplates {
+  const o = isObj(src) ? src : {};
+  const out = {} as RuleTemplates;
+  for (const key of TEMPLATE_KEYS) {
+    const v = o[key];
+    out[key] = typeof v === "string" ? v : DEFAULT_TEMPLATES[key];
+  }
+  return out;
+}
+
 function readRole(raw: unknown): RoleSettings {
   const d = defaultRole();
   if (!isObj(raw)) return d;
@@ -523,6 +557,9 @@ function readRole(raw: unknown): RoleSettings {
     detectPatterns: raw.detectPatterns === undefined ? d.detectPatterns : raw.detectPatterns === true,
     ruleNote: typeof raw.ruleNote === "string" ? raw.ruleNote : d.ruleNote,
     strategyHint: typeof raw.strategyHint === "string" ? raw.strategyHint : d.strategyHint,
+    // 逐项校验：存档里的模板是用户可改的文本，认不出的值（不是字符串）
+    // 一律回落到出厂措辞。**不做 trim**：空白由渲染那一层统一判「等于没填」
+    templates: templatesOf(raw.templates),
     // 认不出的档位一律回落到「留空」（= 用上游默认）。**不往最近的档位上凑**：
     // 降级成 none 会悄悄改语义（用户要的是「多想一点」，你给它「不许想」），
     // 而降级成别的档位更是凭空替用户做了决定 —— 与 clampEffort 同一条理由

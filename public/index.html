@@ -219,6 +219,12 @@ textarea{resize:vertical}
 .field input.numin{width:110px}
 .warnline{display:none;font:10.5px var(--mono);color:var(--red);margin-top:6px}
 .tinylbl{font:10px var(--mono);color:var(--ink-4);margin-top:5px}
+/* 规则说明书模板：校验结果（红）与占位符对照（灰）。
+   两个容器**空时隐藏** —— 没有警告时留一块空白会把抽屉撑长，
+   而「什么都没有」正是这里最该读出来的状态 */
+.tplissues{font:10.5px/1.6 var(--mono);color:var(--red);margin-top:6px}
+.tplhelp{font:10px/1.6 var(--mono);color:var(--ink-4);margin-top:5px;word-break:break-word}
+.tplissues:empty,.tplhelp:empty{display:none}
 
 /* 抽屉内的分区标题 */
 .section-head{margin-bottom:12px}
@@ -390,7 +396,7 @@ textarea{resize:vertical}
 
 <header>
   <h1>生命棋 <span class="x">×</span> Jev</h1>
-  <span class="sub" data-i18n="app.subtitle" data-i18n-title="app.subtitleTitle">决策由 Jev 评估模型给出</span>
+  <span class="sub" id="subTitle" data-i18n="app.subtitle" data-i18n-title="app.subtitleTitle">决策由 Jev 评估模型给出</span>
   <span class="spacer"></span>
 
   <!-- 界面语言。图标取自 Lucide `languages`（ISC），仅 stroke-width 调为与本页其余
@@ -510,9 +516,12 @@ textarea{resize:vertical}
         <span class="turn" id="dTurn"></span>
         <span class="confcap">
           <span data-i18n="chart.conf.title">置信度追踪</span>
+          <!-- ★ 单人模式下**这一栏整个不出现**（`syncModeUi()` 控制）：
+               那时死之执没有一手棋，红色那条带永远画不出来 —— 留着一个
+               永远没有对应曲线的图例，比没有图例更坏。 -->
           <span class="lgd">
             <span><i style="background:var(--green)"></i><span data-i18n="log.roleLife">生之执</span></span>
-            <span><i style="background:var(--red)"></i><span data-i18n="log.roleDeath">死之执</span></span>
+            <span id="lgdDeath"><i style="background:var(--red)"></i><span data-i18n="log.roleDeath">死之执</span></span>
           </span>
         </span>
       </div>
@@ -678,7 +687,11 @@ textarea{resize:vertical}
         <span class="tinylbl" style="margin:0" data-i18n="game.turns">回合</span>
       </div>
       <div class="slider-row" style="margin-top:7px">
-        <span class="tinylbl" style="margin:0;color:var(--red)" data-i18n="game.deathWin">死之执获胜线</span>
+        <!-- ★ 这一栏的措辞**随模式变**（单人局里它说的是「棋盘死绝」，不是
+             「对手赢了」），所以文案不写在 HTML 的 data-i18n 上，而由
+             `syncModeUi()` 统一写 —— 与 #rulesNote 同一种处理。
+             HTML 里留中文是为了没 JS 时还能读。 -->
+        <span class="tinylbl" id="deathWinLbl" style="margin:0;color:var(--red)">死之执获胜线</span>
         <input type="number" class="numin" id="inpDeathWin" min="0" max="100" step="1" value="5">
         <span class="tinylbl" style="margin:0">%</span>
         <span class="tinylbl" style="margin:0" data-i18n="game.streak">连续</span>
@@ -758,6 +771,22 @@ textarea{resize:vertical}
       <span class="sec-note" data-i18n="strategy.ctxNote">改动会进入请求，影响 Jev 的判断 —— 效果看「概率分布」</span>
     </div>
 
+    <!-- ══ ★ 规则说明书的**正文**：六项模板 ══
+         在它出现之前，这六项是在 `core/template.ts` 里现算的 —— 用户看得到
+         结果（日志的 request.state.rules），但改不了措辞。模板把两边都给了：
+         措辞可定制、数值单一来源（占位符由当前设置与局面填）。
+         与下面那条「规则说明（补充）」是两回事：那个是补充，这是正文。 -->
+    <div class="field">
+      <div class="section-head" style="margin-top:0">
+        <span class="sec-title" data-i18n="tpl.section">规则说明书（正文）</span>
+        <span class="sec-note" data-i18n="tpl.sectionNote">发给模型的 rules 六项，各自一份可编辑模板</span>
+      </div>
+      <div class="desc" data-i18n="tpl.intro"></div>
+      <!-- 六个编辑器由 `buildTplEditor()` 现建：这样加一项模板时只需改
+           `core/template.ts` 的 `TEMPLATE_KEYS`，不必同时改 HTML 与 assertDom -->
+      <div id="tplList"></div>
+    </div>
+
     <div class="field">
       <label data-i18n="strategy.ruleNoteLabel">规则说明（补充）→ rules.rule_note</label>
       <div class="desc" data-i18n="strategy.ruleNoteDesc"></div>
@@ -790,7 +819,9 @@ textarea{resize:vertical}
 
     <div class="field">
       <label data-i18n="strategy.memoryLabel">记忆轮数 → recent_history</label>
-      <div class="desc" data-i18n="strategy.memoryDesc"></div>
+      <!-- 措辞随模式变：单人局的记忆里**没有**死之执那一手（`TurnRecord.deathFlip`
+           整个不出现），照双人那句写就是在说一件不会发生的事。同 #rulesNote -->
+      <div class="desc" id="memDesc"></div>
       <div class="slider-row">
         <input type="range" id="inpMemory" min="0" max="60" step="1" value="0">
         <span class="val" id="memoryVal">0</span>
@@ -862,7 +893,8 @@ textarea{resize:vertical}
       <button class="roletab on" data-role="life" data-i18n="log.roleLife">生之执</button>
       <button class="roletab" data-role="death" data-i18n="log.roleDeath">死之执</button>
     </div>
-    <div class="note" data-i18n="api.roleNote"></div>
+    <!-- 提示措辞随模式变（单人局里死之执那一栏整个停用），所以由 `syncModeUi()` 写 -->
+    <div class="note" id="apiRoleNote"></div>
 
     <div class="warn">
       <b data-i18n="api.keySafety">密钥安全</b><br>

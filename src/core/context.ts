@@ -43,6 +43,8 @@ import type { DetectedPattern } from "./patterns.js";
 import { noulDiscriminator } from "../shared/types.js";
 import type { Question, Questions, TurnRecord } from "../shared/types.js";
 import type { Channel } from "./channels.js";
+import { renderTemplates, templateVars } from "./template.js";
+import type { RuleTemplates } from "./template.js";
 import type { Board, Cell, GameRules, Mode, Role, Topology } from "./types.js";
 
 /* ══════════════════════════════════════════════════════════════════
@@ -130,6 +132,15 @@ export interface StateInput {
   /** 此前各回合的记录，从最早到最近。喂给 Jev 的部分受 `memory` 约束 */
   readonly history: readonly TurnRecord[];
   readonly context: RoleContext;
+  /**
+   * 规则说明书的模板（`core/template.ts`）。**缺省 = 用出厂模板**，
+   * 而出厂模板拼出来的就是这一层出现之前那段文字 —— 老的调用方（工具、跑分、
+   * 测试）因此不需要跟着改，也不会有两套文案各自演化。
+   *
+   * 它属于**玩家级**（与 `context.ruleNote` 同级）：措辞是这个实验者给这个
+   * 玩家选的说法，两边可以不一样 —— 这正是跨模型对照要的东西。
+   */
+  readonly templates?: RuleTemplates;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -199,175 +210,14 @@ export interface JevState {
    文案
    ══════════════════════════════════════════════════════════════════
 
-   全部写死在 `core/` 里，不走翻译层（理由见文件头）。参数一律现拼，
-   不出现「写死的可变参数」—— 2048 的教训：把「每次生成几个方块」
-   写进规则描述，改了设置它就变成一句假话。 */
+   六项规则文本（角色陈述 / 计分方式 / 回合视野 / 终局条件 / 获胜条件 /
+   边界说明）已经搬到 `core/template.ts` —— 那里同时住着它们的**出厂模板**
+   与占位符取值表。搬走的理由：那六项现在是「可编辑的模板 + 自动填充」，
+   而模板的默认值必须与填充逻辑住在一处，否则「默认值到底长什么样」会有
+   两个来源，改一处另一处不会跟着动。
 
-/**
- * 角色目标陈述。
- *
- * ★ **死之执必须显式反向。**
- *
- * 它的目标是**最小化**活细胞数，而模型的默认直觉是「让细胞活下来」。
- * 只写「你是 Death」是不够的 —— 那测到的是模型的直觉，不是它对规则的理解。
- * 所以死之执那一份要主动否定直觉（「让细胞活着对你不利」），生之执给对称的
- * 正向表述。测试锁的是**方向词**，不是角色名：只断言「包含角色名」是测不到的。
- */
-function roleStatement(role: Role): string {
-  if (role === "life") {
-    return (
-      "生之执：你是 Life。你的目标是在对局结束时让累计净增长尽可能大 —— " +
-      "也就是让棋盘上的活细胞尽可能多。你每回合可以翻转一个死格为活。" +
-      "注意：让细胞活着对你有利。"
-    );
-  }
-  return (
-    "死之执：你是 Death。你的目标是在对局结束时让累计净增长尽可能小 —— " +
-    "也就是让棋盘上的活细胞尽可能少。你每回合可以翻转一个活格为死。" +
-    "注意：让细胞活着对你不利，即使它们看起来能组成漂亮的结构。"
-  );
-}
-
-/**
- * 计分方式。两个角色共用前半段，只有最后一句相反。
- *
- * ⚠ 单人模式**不能写「双方各翻一格」** —— 那一句在单人局里是假的，而模型
- * 会照着它去推测「对手会怎么应」。规则说明写错一个字，测到的就是另一个游戏。
- */
-function objective(role: Role, mode: Mode): string {
-  const shared =
-    (mode === "solo"
-      ? "计分方式：每回合你翻一格，然后棋盘演化一代；"
-      : "计分方式：每回合双方各翻一格，然后棋盘演化一代；") +
-    "演化后的活细胞数与上一回合相比的变化量，" +
-    "就是这一回合的净增长。把各回合的净增长累加起来，得到累计净增长，记在 scores 里。";
-  const mine =
-    role === "life"
-      ? "你是生之执：累计净增长越大越好 —— 终局时结算的就是它。"
-      : "你是死之执：累计净增长越小越好 —— 终局时结算的就是它，每一代多出来的活细胞都算在你头上。";
-  return `${shared}${mine}`;
-}
-
-/**
- * 百分比文本。
- *
- * 不手写数字，也不直接 `ratio * 100` —— 0.6 在二进制里是 0.5999…，
- * 乘 100 之后是可打印的 60.00000000000001。修约到 4 位再转数字，
- * 输出才是人（和模型）读得懂的那个数。
- */
-function percent(ratio: number): string {
-  return `${Number((ratio * 100).toFixed(4))}%`;
-}
-
-/**
- * 回合视野。
- *
- * `turn` 是**已完成的回合数**（0 起），显示成「第 T 回合」要 +1 ——
- * 这个差 1 只在这里出现一次，别让它散落到各处。
- */
-function horizon(turn: number, rules: GameRules): string {
-  if (rules.turnLimit === null) {
-    return `本局**不设回合上限**，当前是第 ${turn + 1} 回合 —— 一直下到分出胜负、走投无路或推不动为止。`;
-  }
-  return `本局共 ${rules.turnLimit} 回合，当前是第 ${turn + 1} 回合，还剩 ${rules.turnLimit - turn} 回合。`;
-}
-
-/**
- * 获胜条件。
- *
- * ★ **防抖是这条规则的关键部分，不能省。** 生命棋是混沌的，单代涨落很大；
- * 只说「占比 ≥ 60% 获胜」等于把胜负交给随机波动，而模型会据此做决策
- * （它会以为自己已经赢了）。所以这里把「连续」、两边的 streak 数值、
- * 以及为什么要有防抖，全部写出来。
- */
-function winCondition(rules: GameRules, board: Board, mode: Mode): string {
-  const total = board.cols * board.rows;
-  const head =
-    `存活比例 = 棋盘上的活细胞数 ÷ 总格数（${board.cols}×${board.rows} = ${total} 格），记在 alive_ratio 里。\n`;
-  const tail =
-    `「连续」是这条规则的关键部分（防抖）：生命棋单代的涨落很大，只看一代就判胜负等于把胜负交给运气。` +
-    `所以必须是连续越界满 ${rules.lifeStreak} / ${rules.deathStreak} 回合才算赢，` +
-    `中途只要有一回合回到两条线之间，计数就从头开始。`;
-
-  // 单人：那条「死之执获胜」的线仍然生效，但它的含义是**局面自己死绝了**，
-  // 而不是「对手赢了」—— 措辞照实写，别把不存在的人写进规则里
-  if (mode === "solo") {
-    return (
-      head +
-      `你获胜：存活比例「连续」 ${rules.lifeStreak} 回合 ≥ ${percent(rules.lifeWinRatio)}。\n` +
-      `你落败：存活比例「连续」 ${rules.deathStreak} 回合 ≤ ${percent(rules.deathWinRatio)} —— 棋盘死绝。\n` +
-      tail
-    );
-  }
-  return (
-    head +
-    `生之执获胜：存活比例「连续」 ${rules.lifeStreak} 回合 ≥ ${percent(rules.lifeWinRatio)}。\n` +
-    `死之执获胜：存活比例「连续」 ${rules.deathStreak} 回合 ≤ ${percent(rules.deathWinRatio)}。\n` +
-    tail
-  );
-}
-
-/**
- * 终局条件。
- *
- * 由 `GameRules` 现算，覆盖生命的四种结束方式：胜负线、清空/占满、推不动、
- * 回合上限。**不能只写「占比 ≥60% 获胜」** —— 模型不知道棋盘被清空时谁赢、
- * 也不知道打到 90 回合会怎样，那它就在玩另一个游戏。
- */
-function terminationConditions(rules: GameRules, mode: Mode): string {
-  // 单人：**棋盘全死不是终局**（生之执处处可翻），推不动的判定也只问生之执的
-  // 落点。照搬双人那两条会凭空多出两条不存在的结束方式，而模型会据此
-  // 高估「棋盘被清空」的危险，甚至以为自己已经输了
-  // 不设上限时这一条整个不出现 —— 写「上限 ∞」等于告诉模型「还有很多回合」，
-  // 那是一条凭空造出来的规则
-  const limitRule =
-    rules.turnLimit === null
-      ? "4. **本局不设回合上限** —— 一直下到分出胜负、走投无路或推不动为止。"
-      : `4. 回合数达到上限 ${rules.turnLimit}：仍未分出胜负，判和局。`;
-
-  if (mode === "solo") {
-    return (
-      "对局在下列任一情况下立即结束：\n" +
-      `1. 你达成获胜条件，或棋盘死绝（存活比例连续越界达到规定回合数，详见获胜条件）。\n` +
-      "2. 棋盘全活 —— 你把棋盘占满了，一个死格都不剩，判你获胜。" +
-      "这不是「没棋可走就输」，而是你把自己的目标推到了极限。" +
-      "**注意：棋盘全死不会结束对局** —— 那时你仍然可以翻转任意一个死格。\n" +
-      `3. 推不动了：此后无论你怎么落子，下一回合的局面都会重复已经出现过的局面 —— ` +
-      `按当时的存活比例判：≥ ${percent(rules.lifeWinRatio)} 判你胜，≤ ${percent(rules.deathWinRatio)} 判你落败，` +
-      `夹在两条线之间判和局。\n` +
-      limitRule
-    );
-  }
-  return (
-    "对局在下列任一情况下立即结束：\n" +
-    `1. 一方达成获胜条件（存活比例连续越界达到规定回合数，详见获胜条件）。\n` +
-    "2. 走投无路之一：棋盘全死 —— 死之执把活细胞清空了，判死之执胜；" +
-    "棋盘全活 —— 生之执把棋盘占满了，判生之执胜。" +
-    "这不是「没棋可走就输」，而是一方把自己的目标推到了极限。\n" +
-    `3. 走投无路之二：此后无论双方怎么落子，下一回合的局面都会重复已经出现过的局面（推不动了）—— ` +
-    `按当时的存活比例判：≥ ${percent(rules.lifeWinRatio)} 判生之执胜，≤ ${percent(rules.deathWinRatio)} 判死之执胜，` +
-    `夹在两条线之间判和局。\n` +
-    limitRule
-  );
-}
-
-/**
- * 边界说明。
- *
- * 模型必须知道边界怎么算：算错边界的邻居数，它对任何一手后果的预测都是错的。
- */
-function topologyNote(topology: Topology): string {
-  if (topology === "bounded") {
-    return (
-      "拓扑：有界（bounded）。棋盘之外一律算死格 —— 界外没有邻居，" +
-      "一个贴着边界的活细胞在边界那一侧就是没有邻居。棋盘不会卷起来，边界是墙。"
-    );
-  }
-  return (
-    "拓扑：环绕（torus）。棋盘的上下边相连、左右边相连 —— 从一条边走出去的细胞会从对面那条边进来，" +
-    "所以每个格子都有完整的 8 个邻居，棋盘上没有墙。"
-  );
-}
+   不变的仍然不变：文案全部写死在 `core/` 里、不走翻译层（理由见文件头），
+   参数一律现拼，不出现「写死的可变参数」。 */
 
 /** 图例必须带上尺寸与坐标约定：会变的量一律现拼，不写死 */
 function boardLegend(board: Board): string {
@@ -427,15 +277,21 @@ export function buildState(input: StateInput): JevState {
 
   const note = (context.ruleNote ?? "").trim();
 
-  /* ── ① 规则：可移植 ── */
+  /* ── ① 规则：可移植 ──
+     六项文本由模板现渲染：**措辞来自模板，数值来自设置**。没有模板时代
+     渲染的就是出厂模板，也就是这一层出现之前那段文字（有对拍用例守着）。 */
+  const texts = renderTemplates(
+    input.templates,
+    templateVars({ role, mode, topology, board, turn, rules }),
+  );
   const stateRules: StateRules = {
     role,
-    role_statement: roleStatement(role),
-    objective: objective(role, mode),
-    horizon: horizon(turn, rules),
-    termination_conditions: terminationConditions(rules, mode),
-    win_condition: winCondition(rules, board, mode),
-    topology_note: topologyNote(topology),
+    role_statement: texts.role_statement,
+    objective: texts.objective,
+    horizon: texts.horizon,
+    termination_conditions: texts.termination_conditions,
+    win_condition: texts.win_condition,
+    topology_note: texts.topology_note,
     ...(note === "" ? {} : { rule_note: note }),
   };
 

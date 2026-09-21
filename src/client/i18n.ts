@@ -59,6 +59,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "app.subtitle": "决策由 Jev 评估模型给出",
     "app.subtitleTitle":
       "每一回合双方各翻一格，Jev 返回带校准概率的决策 —— 它不做文本生成，只回答「这一格翻不翻」",
+    // 单人局的副标题提示：照双人那句写就是在说一件不会发生的事（没有第二个行动方）
+    "app.subtitleTitleSolo":
+      "单人局：每回合只有生之执翻一格，Jev 返回带校准概率的决策 —— 它不做文本生成，只回答「这一格翻不翻」",
     "nav.game": "游戏",
     "nav.gameTitle":
       "棋盘尺寸、拓扑、终局规则、开局 —— 生命棋里规则不自明，这里改任何东西都会进入 Jev 的输入，概率分布应当随之变化",
@@ -80,10 +83,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     "ctrl.started": "● 已开始",
     "ctrl.pause": "⏸ 暂停",
     "ctrl.takeoverTitle": "让双方 AI 自动对弈 / 暂停（空格）",
+    "ctrl.takeoverTitleSolo": "让生之执自动走 / 暂停（空格）",
     "ctrl.resumeTitle": "接着这一局往下走（空格）",
     "ctrl.startedTitle": "对弈进行中 —— 点一下暂停（空格）",
     "ctrl.step": "单步",
     "ctrl.stepTitle": "只走一个回合（双方同时落子，再演化一代）",
+    "ctrl.stepTitleSolo": "只走一个回合（生之执翻一格，再演化一代）",
     "ctrl.new": "↺ 重开",
     "ctrl.newTitle": "重开一局，保留全部设置",
     "ctrl.clearBoard": "清空棋盘",
@@ -156,9 +161,16 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.rulesUncalibrated": "⚠ 这些阈值全是占位值，未经跑分标定 —— 开放它们是为了能试，不是说它们已经准了。",
     "game.rulesInverted":
       "⚠ 死之执的线不低于生之执的线：判终局时生之执那条先判，倒挂会让死之执的线实际上永远轮不到。",
+    // ★ 单人局里那两条线**仍然有意义**，但含义换了：没有对手，跌破死之执那条线
+    // 说的是「棋盘死绝」。措辞跟着换，否则界面会把一个不在场的人写进规则里
+    "game.rulesNoteSolo":
+      "胜负线：生之执 ≥ {life}% 连续 {ls} 回合获胜；占比 ≤ {death}% 连续 {ds} 回合则**棋盘死绝**（单人局没有对手，那不是「对手赢了」）。清空 / 占满棋盘、整盘推不动都会立即终局。",
+    "game.rulesInvertedSolo":
+      "⚠ 棋盘死绝线不低于生之执获胜线：判终局时生之执那条先判，倒挂会让棋盘死绝这条实际上永远轮不到。",
     "game.turnLimitWarn": "回合上限必须是 1 以上的整数",
     "game.lifeWin": "生之执获胜线",
     "game.deathWin": "死之执获胜线",
+    "game.deathWinSolo": "棋盘死绝线",
     "game.streak": "连续",
     "game.turns": "回合",
     "game.winLineHint":
@@ -192,7 +204,57 @@ const DICT: Record<Lang, Record<string, string>> = {
     "strategy.ctxNote": "改动会进入请求，影响 Jev 的判断 —— 效果看「概率分布」",
     "strategy.ruleNoteLabel": "规则说明（补充）→ rules.rule_note",
     "strategy.ruleNoteDesc":
-      "规则正文由当前的对局设置现算（尺寸、拓扑、胜负线都在里面），所以这里只填**补充**。留空则整个字段不出现。",
+      "规则**正文**由上面那六份模板渲染（尺寸、拓扑、胜负线都在里面），所以这里只填**补充**。留空则整个字段不出现。",
+    // ★ 单人模式：整个玩家栏都是死配置（`syncModeUi()` 会把它停用）。
+    // 这句话是停用的**理由** —— 不写出来，用户只会以为那一栏坏了
+    "strategy.roleHintSolo":
+      "单人模式没有死之执：死之执那一栏的设置**一项都不会被用到**（后端、模型、上下文、策略都不下场），所以整栏已停用。切回「双人对弈」即可编辑，设置也还在。",
+
+    /* ---------- ★ 规则说明书模板（策略 › 上下文）---------- */
+    "tpl.section": "规则说明书（正文）",
+    "tpl.sectionNote": "发给模型的 rules 六项，各自一份可编辑模板",
+    "tpl.intro":
+      "这六项就是发给 Jev 的 rules 正文。措辞随你写；带双花括号的名字是**占位符**，由当前设置与局面自动填充 —— 数值永远来自设置，所以「本局共 90 回合」这类话不必写、写死了就成了一句假话。删掉占位符不会报错，但模型会少知道一件事，下面会逐条指出来（只提示，不阻止）。留空则回到出厂措辞。",
+    "tpl.role_statement": "角色陈述 → rules.role_statement",
+    "tpl.objective": "计分方式 → rules.objective",
+    "tpl.horizon": "回合视野 → rules.horizon",
+    "tpl.termination_conditions": "终局条件 → rules.termination_conditions",
+    "tpl.win_condition": "获胜条件 → rules.win_condition",
+    "tpl.topology_note": "边界说明 → rules.topology_note",
+    "tpl.help": "占位符（当前会填成）：",
+    "tpl.helpUnknown": "（认不出这个占位符，它会原样发出去）",
+    "tpl.unknown": "「{name}」不是占位符 —— 它会连花括号一起被发出去",
+    "tpl.unclosed": "有一个 {{ 没有配对的 }} —— 那半句会连花括号一起被发出去",
+    "tpl.missing": "「{name}」不在了：{why}",
+
+    /* 每个占位符「缺了它模型就不知道什么」。key 由 core/template.ts 的
+       PLACEHOLDERS 指过来（那边只留 key，措辞在这一层）—— 有一条 core 测试
+       守着「默认模板里出现过的占位符都必须有 whyKey」 */
+    "tpl.why.role": "模型据此知道自己是哪一方",
+    "tpl.why.codename": "模型据此知道自己扮演的是 Life 还是 Death",
+    "tpl.why.direction": "方向词（尽可能多 / 尽可能少）—— 死之执那一边必须反向，写反了测到的是模型的直觉而不是它对规则的理解",
+    "tpl.why.flipAbility": "模型据此知道自己这一手能翻的是哪种格子",
+    "tpl.why.attitude": "「让细胞活着对你有（不）利」—— 死之执缺了这句就只剩一个角色名，模型会按「让细胞活着」的直觉答",
+    "tpl.why.objectiveMine": "结算方向：累计净增长对你是越大越好还是越小越好",
+    "tpl.why.mode": "这一局是双人对弈还是单人",
+    "tpl.why.perTurnFlips": "一回合有几个人落子 —— 单人局里写「双方」，模型会去等一个不存在的对手",
+    "tpl.why.turn": "当前是第几回合",
+    "tpl.why.turnLimit": "这局有没有回合上限、还剩多久（不设上限时它会换成整句话）",
+    "tpl.why.lifeWinRatio": "生之执获胜的占比阈值",
+    "tpl.why.deathWinRatio": "死之执获胜（单人局里是棋盘死绝）的占比阈值",
+    "tpl.why.lifeStreak": "生之执要连续越界几回合才算赢（防抖）",
+    "tpl.why.deathStreak": "死之执要连续越界几回合才算赢（防抖）",
+    "tpl.why.topology": "边界是有界还是环绕",
+    "tpl.why.topologyDetail": "界外算死、环绕怎么算邻居 —— 邻居数算错，模型对任何一手后果的预测都是错的",
+    "tpl.why.cols": "棋盘有几列",
+    "tpl.why.rows": "棋盘有几行",
+    "tpl.why.cells": "总格数（占比的分母）",
+    "tpl.why.winnerLine": "获胜条件那一行（含占比阈值与防抖轮数），措辞随模式变 —— 单人局里写的是「你获胜」",
+    "tpl.why.loserLine": "落败条件那一行。单人局里它是「你落败 —— 棋盘死绝」；照搬双人那句就是把一个不在场的人写进规则",
+    "tpl.why.endByWinLine": "终局条件第 1 条（胜负线触发终局），措辞随模式变",
+    "tpl.why.endByBoardFull": "终局条件第 2 条（棋盘全死 / 全活）。单人局里「全死」**不是**终局，照抄双人那条会让模型以为棋盘被清空就输了",
+    "tpl.why.endByStuck": "终局条件第 3 条（推不动了按占比判胜负）",
+    "tpl.why.turnLimitEnd": "终局条件第 4 条（回合上限）。不设上限时它会整个换掉 —— 写「上限 ∞」等于凭空造一条规则",
     "strategy.hintLabel": "策略提示 → aids.strategy_hint",
     "strategy.hintDesc": "生命棋的知识（哪些是静物、滑翔机会飞）恰恰是这套实验想测量的东西，所以默认留空。",
     "strategy.predictLabel": "后果预测",
@@ -200,6 +262,8 @@ const DICT: Record<Lang, Record<string, string>> = {
       "打开后把「这一手 + 演化一代」的活细胞数变化作为**背景**写进题面。只是背景：问的自始至终是长期价值，否则等于把答案写在题面上。",
     "strategy.memoryLabel": "记忆轮数 → recent_history",
     "strategy.memoryDesc": "把最近 n 回合的「局面 + 双方落点 + 净增长」一并发给 Jev。0 = 不加入。",
+    // 单人局的记忆里**没有**死之执那一手（`TurnRecord.deathFlip` 整个不出现）
+    "strategy.memoryDescSolo": "把最近 n 回合的「局面 + 你的落点 + 净增长」一并发给 Jev。单人局没有死之执那一手，0 = 不加入。",
     "strategy.memoryNote": "上限受模型上下文窗口约束，超出预算时会截断。",
     "strategy.max": "最大",
     "strategy.maxTitle": "在上下文预算内尽量塞满",
@@ -317,6 +381,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "stats.latency": "延迟",
     "status.ready": "就绪",
     "status.calling": "正在请求双方决策…",
+    "status.callingSolo": "正在请求生之执的决策…",
     "status.retrying": "第 {n} 次重试（{s}s 后）",
     "status.online": "已连接",
     "status.paused": "已暂停",
@@ -369,6 +434,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     /* ---------- 日志 ---------- */
     "log.title": "调用日志",
     "log.desc": "每个回合一条：双方各自的请求体与回包。按回合折叠，展开看完整 JSON。",
+    "log.snapLabel": "这一手用的规则说明书模板",
+    "log.copySnap": "复制模板",
     "log.empty": "还没有请求记录",
     "log.turnCount": "{n} 回合",
     "log.copyReq": "复制请求",
@@ -519,6 +586,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "app.subtitle": "Every decision comes from the Jev evaluation model",
     "app.subtitleTitle":
       "Each turn both sides flip one cell and Jev returns calibrated probabilities — no text generation, just whether to flip this cell",
+    "app.subtitleTitleSolo":
+      "Solo game: each turn only Life flips a cell, and Jev returns calibrated probabilities — no text generation, just whether to flip this cell",
     "nav.game": "Game",
     "nav.gameTitle":
       "Board size, topology, end rules, opening — in Life Chess the rules are not self-evident, so anything changed here enters Jev's input and the probability distribution should change with it",
@@ -540,10 +609,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     "ctrl.started": "● In progress",
     "ctrl.pause": "⏸ Pause",
     "ctrl.takeoverTitle": "Let both AIs play automatically / pause (space)",
+    "ctrl.takeoverTitleSolo": "Let Life play automatically / pause (space)",
     "ctrl.resumeTitle": "Carry on with this game (space)",
     "ctrl.startedTitle": "The duel is running — click to pause (space)",
     "ctrl.step": "Step",
     "ctrl.stepTitle": "Play a single turn (both sides flip, then one evolution)",
+    "ctrl.stepTitleSolo": "Play a single turn (Life flips one cell, then one evolution)",
     "ctrl.new": "↺ Restart",
     "ctrl.newTitle": "Start a fresh game, keeping every setting",
     "ctrl.clearBoard": "Clear board",
@@ -615,9 +686,14 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.rulesUncalibrated": "⚠ These thresholds are placeholders and have not been calibrated by benchmark runs — they are editable so you can experiment, not because they are now trustworthy.",
     "game.rulesInverted":
       "⚠ Death's line is not below Life's: the Life condition is tested first, so an inverted pair means Death's line can never actually trigger.",
+    "game.rulesNoteSolo":
+      "Win lines: Life wins at ≥ {life}% held for {ls} turns; a ratio ≤ {death}% held for {ds} turns means **the board died out** (there is no opponent in a solo game, so it is not “the opponent won”). Emptying or filling the board, or a position that can no longer move, ends the game immediately.",
+    "game.rulesInvertedSolo":
+      "⚠ The died-out line is not below Life's win line: the Life condition is tested first, so an inverted pair means the died-out line can never actually trigger.",
     "game.turnLimitWarn": "The turn limit must be either empty (no limit) or an integer of at least 1",
     "game.lifeWin": "Life wins at",
     "game.deathWin": "Death wins at",
+    "game.deathWinSolo": "Died out at",
     "game.streak": "for",
     "game.turns": "turns",
     "game.winLineHint":
@@ -651,7 +727,52 @@ const DICT: Record<Lang, Record<string, string>> = {
     "strategy.ctxNote": "Changes enter the request and affect Jev's judgement — watch the probability distribution",
     "strategy.ruleNoteLabel": "Rule notes (supplementary) → rules.rule_note",
     "strategy.ruleNoteDesc":
-      "The body of the rules is computed from the current game settings (size, topology, win lines are all in there), so this field is for supplements only. Leave it empty and the field disappears entirely.",
+      "The **body** of the rules is rendered from the six templates above (size, topology and win lines are all in there), so this field is for supplements only. Leave it empty and the field disappears entirely.",
+    "strategy.roleHintSolo":
+      "There is no Death in solo mode: nothing in Death's column is ever used (backend, model, context, strategy — it never takes part), so the whole column is disabled. Switch back to “Duel” to edit it; the settings are still there.",
+
+    /* ---------- ★ Rule templates (Strategy › Context) ---------- */
+    "tpl.section": "Rule sheet (body)",
+    "tpl.sectionNote": "The six rules items sent to the model, each an editable template",
+    "tpl.intro":
+      "These six items are the body of the rules sent to Jev. Write the wording however you like; names in double braces are **placeholders** filled from the current settings and position — values always come from settings, so “90 turns this game” need not be written out, and hard-coding it would make it a lie. Deleting a placeholder raises no error, but the model then knows one thing less; the notes below say which (a warning only, never a block). Empty falls back to the factory wording.",
+    "tpl.role_statement": "Role statement → rules.role_statement",
+    "tpl.objective": "Scoring → rules.objective",
+    "tpl.horizon": "Horizon → rules.horizon",
+    "tpl.termination_conditions": "End conditions → rules.termination_conditions",
+    "tpl.win_condition": "Win condition → rules.win_condition",
+    "tpl.topology_note": "Boundary note → rules.topology_note",
+    "tpl.help": "Placeholders (currently filled as):",
+    "tpl.helpUnknown": "(unknown placeholder — it is sent through as written)",
+    "tpl.unknown": "“{name}” is not a placeholder — it is sent through with its braces",
+    "tpl.unclosed": "There is a {{ with no matching }} — that fragment is sent through with its braces",
+    "tpl.missing": "“{name}” is gone: {why}",
+
+    "tpl.why.role": "how the model knows which side it is on",
+    "tpl.why.codename": "how the model knows whether it plays Life or Death",
+    "tpl.why.direction": "the direction word (as large / as small as possible) — Death's copy must be reversed, or what gets measured is the model's instinct rather than its reading of the rules",
+    "tpl.why.flipAbility": "which kind of cell the model may flip",
+    "tpl.why.attitude": "“keeping cells alive is (dis)advantageous to you” — without it Death is just a role name and the model answers on the “keep cells alive” instinct",
+    "tpl.why.objectiveMine": "which direction the score settles in for this player",
+    "tpl.why.mode": "whether this is a duel or a solo game",
+    "tpl.why.perTurnFlips": "how many players move each turn — saying “both sides” in a solo game makes the model wait for an opponent that is not there",
+    "tpl.why.turn": "which turn it is",
+    "tpl.why.turnLimit": "whether there is a turn limit and how much is left (with no limit it expands to a whole clause)",
+    "tpl.why.lifeWinRatio": "the ratio threshold at which Life wins",
+    "tpl.why.deathWinRatio": "the ratio threshold at which Death wins (the board died out, in a solo game)",
+    "tpl.why.lifeStreak": "how many turns in a row Life must stay beyond the line (debounce)",
+    "tpl.why.deathStreak": "how many turns in a row Death must stay beyond the line (debounce)",
+    "tpl.why.topology": "whether the boundary is bounded or a torus",
+    "tpl.why.topologyDetail": "how neighbours are counted outside the board or across the wrap — get the neighbour count wrong and every consequence prediction is wrong",
+    "tpl.why.cols": "how many columns the board has",
+    "tpl.why.rows": "how many rows the board has",
+    "tpl.why.cells": "the total cell count (the denominator of the ratio)",
+    "tpl.why.winnerLine": "the winning line (threshold plus debounce turns); its wording follows the mode and reads “you win” in a solo game",
+    "tpl.why.loserLine": "the losing line. In a solo game it reads “you lose — the board died out”; copying the duel wording puts a player who is not there into the rules",
+    "tpl.why.endByWinLine": "end condition 1 (a win line ends the game); its wording follows the mode",
+    "tpl.why.endByBoardFull": "end condition 2 (board all dead / all alive). In a solo game “all dead” is **not** an ending, and copying the duel text makes the model think an emptied board is a loss",
+    "tpl.why.endByStuck": "end condition 3 (stuck position judged by the ratio)",
+    "tpl.why.turnLimitEnd": "end condition 4 (turn limit). With no limit it is replaced entirely — writing “limit ∞” invents a rule out of nothing",
     "strategy.hintLabel": "Strategy hint → aids.strategy_hint",
     "strategy.hintDesc": "Knowledge of Life (which shapes are still lifes, that gliders travel) is exactly what this experiment measures, so it is empty by default.",
     "strategy.predictLabel": "Outcome prediction",
@@ -659,6 +780,7 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Adds the live-cell change of “this flip plus one evolution” to the question text as background. Background only: the question always asks about long-term value, or the answer would be printed on the question.",
     "strategy.memoryLabel": "Memory turns → recent_history",
     "strategy.memoryDesc": "Sends the last n turns (board, both flips, net growth) along with the request. 0 = leave it out.",
+    "strategy.memoryDescSolo": "Sends the last n turns (board, your flip, net growth) along with the request. A solo game has no Death flip. 0 = leave it out.",
     "strategy.memoryNote": "Bounded by the model's context window; truncated when over budget.",
     "strategy.max": "Max",
     "strategy.maxTitle": "Fill as much as the context budget allows",
@@ -776,6 +898,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "stats.latency": "Latency",
     "status.ready": "Ready",
     "status.calling": "Waiting for both decisions…",
+    "status.callingSolo": "Waiting for Life's decision…",
     "status.retrying": "Retry {n} (in {s}s)",
     "status.online": "Connected",
     "status.paused": "Paused",
@@ -828,6 +951,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     /* ---------- Log ---------- */
     "log.title": "Call log",
     "log.desc": "One entry per turn: both sides' request and response. Collapsed by turn; expand for the full JSON.",
+    "log.snapLabel": "Rule templates used for this move",
+    "log.copySnap": "Copy templates",
     "log.empty": "No calls recorded yet",
     "log.turnCount": "{n} turns",
     "log.copyReq": "Copy request",

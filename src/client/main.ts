@@ -30,6 +30,14 @@ import {
 } from "../core/life.js";
 import { buildQuestions, buildState } from "../core/context.js";
 import type { RoleContext, StateInput } from "../core/context.js";
+import {
+  PLACEHOLDERS,
+  TEMPLATE_KEYS,
+  placeholdersIn,
+  templateIssues,
+  templateVars,
+} from "../core/template.js";
+import type { RuleTemplateKey, RuleTemplates } from "../core/template.js";
 import { parseAnswers } from "../core/channels.js";
 import { resolveDecision } from "../core/decide.js";
 import type { CellProbabilities } from "../core/decide.js";
@@ -67,6 +75,7 @@ import {
   load,
   presetFor,
   save,
+  templatesOf,
   type ArchiveSettings,
   type Persisted,
   type RoleSettings,
@@ -104,6 +113,7 @@ import {
   type ArchiveKind,
 } from "./archive.js";
 import { applyDom, getLang, onLangChange, setLang, t } from "./i18n.js";
+import { modeUi } from "./mode.js";
 import type { Opening } from "../core/presets.js";
 
 /* ═══════════ 常量 ═══════════ */
@@ -797,7 +807,7 @@ async function doTurn(): Promise<void> {
   const solo = mode === "solo";
   const rules = currentRules();
   const board = state.board;
-  setLed("busy", "status.calling");
+  setLed("busy", modeUi(mode).calling);
 
   /* ── 双方**同时**决策，都基于演化前的棋盘（见文件头）──
      单人模式只有生之执一方，所以这里只有一个 attempt —— 后面所有按下标取
@@ -821,6 +831,9 @@ async function doTurn(): Promise<void> {
       scores: { life: state.scores.life, death: state.scores.death },
       history: state.history,
       context: roleContextOf(settings),
+      // 规则说明书正文由这个玩家自己的模板渲染。**逐项兜底**在这里再做一次：
+      // 导入存档那条路径不经过 `readRole`（见 `templatesOf` 的注释）
+      templates: templatesOf(settings.templates),
     };
     const channel = channelOf(settings);
     return {
@@ -1106,6 +1119,13 @@ function roleLogOf(
     costUsd: res?.costUsd ?? null,
     request: attempt.request,
     response: res?.raw ?? null,
+    // ★ 这一手用的六份模板**原文**。
+    //
+    // 渲染结果已经躺在 `request.state.rules` 里了，再存一份输入不是冗余：
+    // 改了模板之后要对照的是「当时用的是哪一版措辞」，而渲染结果只告诉你
+    // 那一版**长什么样** —— 它没法把模板改回去重放。规格里管这个叫
+    // contextSnapshot，这里就用这个名字。
+    contextSnapshot: templatesOf(attempt.settings.templates),
     ...(outcome.ok ? {} : { error: outcome.error }),
   };
 }
@@ -1215,7 +1235,8 @@ function syncRunButton(): void {
   } else {
     const started = state.turn > 0;
     b.textContent = t(started ? "ctrl.resume" : "ctrl.takeover");
-    b.title = t(started ? "ctrl.resumeTitle" : "ctrl.takeoverTitle");
+    // 单人局的提示不能说「双方 AI」—— 那里只有一个 AI（见 mode.ts 那张表）
+    b.title = started ? t("ctrl.resumeTitle") : t(modeUi(store.duel.mode).takeoverTitle);
     b.classList.remove("running");
     b.classList.add("primary");
   }
@@ -1509,11 +1530,18 @@ function roleBlock(rl: RoleLog | null, role: Role, key: string): string {
       <button data-copy="req" data-role="${role}" data-k="${escapeHtml(key)}">${escapeHtml(t("log.copyReq"))}</button>
       <button data-copy="res" data-role="${role}" data-k="${escapeHtml(key)}">${escapeHtml(t("log.copyRes"))}</button>
       <button data-copy="both" data-role="${role}" data-k="${escapeHtml(key)}">${escapeHtml(t("log.copyBoth"))}</button>
+      ${rl.contextSnapshot ? `<button data-copy="snap" data-role="${role}" data-k="${escapeHtml(key)}">${escapeHtml(t("log.copySnap"))}</button>` : ""}
     </div>
     <div class="lglabel">${escapeHtml(t("log.reqLabel"))}</div>
     ${hasPayload ? `<pre>${escapeHtml(fmtJson(rl.request))}</pre>` : `<div class="lghint">${escapeHtml(t("log.noPayload"))}</div>`}
     <div class="lglabel">${escapeHtml(t("log.resLabel"))}</div>
     ${rl.error ? `<div class="lghint">${escapeHtml(t("log.noResponse"))}</div>` : `<pre>${escapeHtml(fmtJson(rl.response))}</pre>`}
+    <!-- ★ 这一手用的六份模板原文。
+         渲染出来的规则文本已经在上面的 request 里了 —— 这里存的是它的**输入**，
+         因为改了模板之后要对照的正是「当时用的是哪一版措辞」。
+         老存档没有这一栏，所以整块可以缺席 -->
+    ${rl.contextSnapshot ? `<div class="lglabel">${escapeHtml(t("log.snapLabel"))}</div>
+    <pre>${escapeHtml(fmtJson(rl.contextSnapshot))}</pre>` : ""}
   </div>`;
 }
 
@@ -1601,6 +1629,7 @@ function renderLog(): void {
       const parts: string[] = [];
       if (kind === "req" || kind === "both") parts.push(fmtJson(rl.request));
       if (kind === "res" || kind === "both") parts.push(fmtJson(rl.response));
+      if (kind === "snap") parts.push(fmtJson(rl.contextSnapshot));
       void copyText(parts.join("\n\n"), btn);
     };
   });
@@ -1806,6 +1835,68 @@ function renderOpenings(): void {
   }
 }
 
+/**
+ * ★ 单人模式：把**界面上有、实际不生效**的东西收掉。
+ *
+ * 逻辑侧早就贯穿到位了（每回合请求数、只跑生之执、日志无 `death_flip`、
+ * 计分、终局文案、`soloDiedOut`），缺的一直是界面这一半：单人模式下
+ * 死之执那一栏的设置仍然显示、仍然可编辑，**而它们一项都不会被用到**。
+ * 这与刚修掉的 `callPolicy` 是同一类错 —— 界面上有、实际不生效，
+ * 症状离原因很远（用户会以为「我关了思维链怎么没用」，其实那一栏根本没人读）。
+ *
+ * 所以这里做三件事，缺一不可：
+ *   1. **停用**死之执那一栏（两个抽屉都有），而不是藏起来 ——
+ *      藏起来会让人以为这个角色被删了，而那几项设置其实还在存档里
+ *   2. **说明理由**：`roleHint` / `api.roleNote` 换成单人版。不写理由的
+ *      停用与「坏了」在用户眼里是同一件事
+ *   3. **措辞跟着含义走**：死之执那条胜负线在单人局里仍有意义（它是
+ *      「棋盘死绝」的判据），但不再是「对手赢了」—— 标签与说明都换掉
+ *
+ * 它由 `syncGameUi()` 调用（`relanguage()` 与 `applyDuelSettings()` 都会
+ * 走到那里），所以语言切换、模式切换、导入存档三条路径都不需要各自记得调。
+ */
+function syncModeUi(): void {
+  // 「哪一项该怎么变」全在 `mode.ts` 那张表里，并由 `mode.test.ts` 断言 ——
+  // 这里只管把它落到 DOM 上
+  const m = modeUi(store.duel.mode);
+
+  // 死之执那一栏在整个单人局里都没有消费者。当前如果正停在它上面，
+  // 先把视角挪回生之执，再让两个抽屉各自重画一次 —— 否则用户会看着一栏
+  // 已被停用的设置，而它显示的还是死之执的
+  if (!m.deathColumnEnabled && state.role === "death") {
+    // 先落盘再走 —— 用户可能刚在死之执那一栏里改完还没失焦，直接切走会把
+    // 编辑内容丢掉，而且没有任何提示。停用是「不再读它」，不是「把它删了」
+    applyRoleSettings();
+    state.role = "life";
+    syncStrategyUi();
+    syncApiUi();
+  }
+
+  // 两个抽屉各有一组 roletab（策略 / API），一次全处理
+  for (const b of document.querySelectorAll<HTMLButtonElement>(".roletab")) {
+    const role = ROLE_OF_KEY[b.dataset.role ?? ""];
+    const off = !m.deathColumnEnabled && role === "death";
+    b.disabled = off;
+    // 停用的按钮上的 title 是**唯一**能说明「为什么按不动」的地方
+    b.title = off ? t(m.roleHint) : "";
+  }
+  $("roleHint").textContent = t(m.roleHint);
+  $("apiRoleNote").textContent = t(m.roleHint);
+
+  // ① 置信度图的图例：单人时死之执那一项整个不出现。
+  // 那张图上永远不会有红色的带（没有死之执的日志就取不到分布），
+  // 留一个没有曲线的图例比没有图例更坏
+  $("lgdDeath").style.display = m.deathLegendVisible ? "" : "none";
+
+  // ② 死之执那条线：单人局里它是「棋盘死绝」，不是「对手赢了」
+  $("deathWinLbl").textContent = t(m.deathWinLabel);
+
+  // ③ 措辞里带「双方」的那几处（单步按钮的提示、副标题、记忆说明）
+  $<HTMLButtonElement>("bStep").title = t(m.stepTitle);
+  $("subTitle").title = t(m.subtitleTitle);
+  $("memDesc").textContent = t(m.memoryDesc);
+}
+
 function syncGameUi(): void {
   renderSizeButtons();
   renderOpenings();
@@ -1842,8 +1933,11 @@ function syncGameUi(): void {
   $<HTMLInputElement>("inpDeathStreak").value = String(store.duel.deathStreak);
 
   const rules = currentRules();
+  // ★ 单人局里那两条线的**含义**变了（跌破死之执那条线的意思是「棋盘死绝」，
+  // 没有对手），所以整段说明跟着换一套措辞 —— 阈值本身照旧生效，换的只是说法
+  const m = modeUi(store.duel.mode);
   $("rulesNote").textContent =
-    t("game.rulesNote", {
+    t(m.rulesNote, {
       life: Math.round(rules.lifeWinRatio * 100),
       ls: rules.lifeStreak,
       death: Math.round(rules.deathWinRatio * 100),
@@ -1855,9 +1949,7 @@ function syncGameUi(): void {
     t("game.rulesUncalibrated") +
     // 两条线倒挂：不禁止（这四个数本来就是拿来试的），但要说出来 ——
     // 判终局时生之执那条先判，倒挂会让死之执的线实际上永远轮不到
-    (store.duel.deathWinRatio >= store.duel.lifeWinRatio
-      ? " " + t("game.rulesInverted")
-      : "");
+    (store.duel.deathWinRatio >= store.duel.lifeWinRatio ? " " + t(m.rulesInverted) : "");
 
   // 三个纯画面设置的**唯一**消费者（T14 里前两个没有任何消费者，只留了一句注释）。
   // 接在这里而不是散到各处：改了设置之后 `applyDuelSettings` 必定回到这里，
@@ -1867,6 +1959,10 @@ function syncGameUi(): void {
   renderer.flipMs = store.duel.flipMs;
   $<HTMLInputElement>("inpFlipMs").value = String(store.duel.flipMs);
   $("flipMsVal").textContent = paceLabel(store.duel.flipMs);
+
+  // 模式相关的那些（措辞、停用、图例）收在**一处** —— 放在这个函数的末尾，
+  // 是因为它是「对局级设置变了」的唯一汇聚点（`relanguage()` 也走这里）
+  syncModeUi();
 }
 
 /**
@@ -2026,7 +2122,10 @@ function syncRoleTabs(): void {
     const role = ROLE_OF_KEY[b.dataset.role ?? ""];
     b.classList.toggle("on", role === state.role);
   }
-  $("roleHint").textContent = t("strategy.perRoleNote");
+  // ⚠ `#roleHint` **不在这里写** —— 它的措辞随模式变（单人局要说明死之执那一栏
+  // 为什么停用），而两个抽屉都会调本函数、谁后调谁说了算。留一个写者：
+  // `syncModeUi()`。曾经写在这里，结果是打开一次 API 抽屉就把单人说明顶回
+  // 「双边可以配得不一样」——而那正是单人局里已经作废的那句话
 
   // 两个「复制到另一方」按钮的**方向**写在标签里，所以它们不是静态文案：
   // 既随语言变，也随当前选中的玩家变。写在 HTML 里会得到一句永远中文、
@@ -2037,6 +2136,135 @@ function syncRoleTabs(): void {
   });
   $("bStrategySync").textContent = label;
   $("bApiSync").textContent = label;
+}
+
+/* ═══════════ 规则说明书模板（正文）═══════════
+ *
+ * 六项模板的编辑器。**结构建一次，之后只更新取值与提示** —— 每次 sync 都重建
+ * `innerHTML` 会把正在编辑的光标与选区顶掉，而 `syncStrategyUi` 会被语言切换、
+ * 切玩家、改任意一栏设置触发（比「偶尔」频繁得多）。
+ *
+ * 每一条模板下面是两类提示，都是**只提示不阻止**：
+ *   · 校验：缺了哪个占位符（模型会少知道一件事）、哪个认不出、哪个没闭合
+ *   · 对照：这一项里的占位符**当前会填成什么** —— 这一条是「不透明」的正解，
+ *     用户不必先保存、再开局、再去日志里翻
+ */
+
+/** 每项模板给几行。长的（终局条件、获胜条件）给 6 行，省得用户一进来就得拖 */
+const TPL_ROWS: Record<RuleTemplateKey, number> = {
+  role_statement: 3,
+  objective: 4,
+  horizon: 2,
+  termination_conditions: 6,
+  win_condition: 6,
+  topology_note: 3,
+};
+
+function tplBox(key: RuleTemplateKey): HTMLElement {
+  return $("tplList").querySelector<HTMLElement>(`[data-tpl="${key}"]`) as HTMLElement;
+}
+
+function buildTplEditor(): void {
+  const host = $("tplList");
+  if (host.childElementCount > 0) return;
+
+  for (const key of TEMPLATE_KEYS) {
+    const box = document.createElement("div");
+    box.className = "field";
+    box.dataset.tpl = key;
+
+    const label = document.createElement("label");
+    const input = document.createElement("textarea");
+    input.rows = TPL_ROWS[key];
+    const issues = document.createElement("div");
+    issues.className = "tplissues";
+    issues.dataset.tplIssues = key;
+    const help = document.createElement("div");
+    help.className = "tplhelp";
+    help.dataset.tplHelp = key;
+
+    box.append(label, input, issues, help);
+    host.appendChild(box);
+    input.addEventListener("change", applyRoleSettings);
+  }
+}
+
+/** 把一组文本行铺进一个容器。**用 textContent**：占位符展开值里可能有用户写的
+ *  花括号与尖括号，拼 HTML 会把它们当标签 */
+function setLines(host: HTMLElement, lines: readonly string[]): void {
+  host.replaceChildren(
+    ...lines.map((text) => {
+      const d = document.createElement("div");
+      d.textContent = text;
+      return d;
+    }),
+  );
+}
+
+function syncTplEditor(s: RoleSettings): void {
+  buildTplEditor();
+  const tpl = templatesOf(s.templates);
+  const vars = templateVars({
+    role: state.role,
+    mode: store.duel.mode,
+    topology: store.duel.topology,
+    board: state.board,
+    turn: state.turn,
+    rules: currentRules(),
+  });
+  const issues = templateIssues(tpl);
+
+  for (const key of TEMPLATE_KEYS) {
+    const box = tplBox(key);
+    box.querySelector("label")!.textContent = t(`tpl.${key}`);
+    const input = box.querySelector("textarea") as HTMLTextAreaElement;
+    // 正在编辑的那一栏不覆写 —— 否则切语言/切玩家会把没提交的输入吞掉
+    if (document.activeElement !== input) input.value = tpl[key];
+
+    setLines(
+      box.querySelector<HTMLElement>("[data-tpl-issues]")!,
+      issues
+        .filter((i) => i.key === key)
+        .map((i) => {
+          if (i.kind === "unknown") return t("tpl.unknown", { name: `{{${i.placeholder}}}` });
+          if (i.kind === "unclosed") return t("tpl.unclosed");
+          const whyKey = PLACEHOLDERS.find((p) => p.name === i.placeholder)?.whyKey ?? "";
+          return t("tpl.missing", {
+            name: `{{${i.placeholder}}}`,
+            why: whyKey ? t(whyKey) : "",
+          });
+        }),
+    );
+
+    setLines(box.querySelector<HTMLElement>("[data-tpl-help]")!, [
+      t("tpl.help"),
+      ...placeholdersIn(tpl[key]).map((name) =>
+        Object.hasOwn(vars, name)
+          ? `{{${name}}} → ${vars[name]}`
+          : `{{${name}}} ${t("tpl.helpUnknown")}`,
+      ),
+    ]);
+  }
+}
+
+/**
+ * 界面上那六栏 → `RuleTemplates`。空串**原样存**（渲染那一层才知道怎么回落）。
+ *
+ * ⚠ 类型写成 `RuleTemplates` 而不是索引访问（`RoleSettings` 后跟方括号里的
+ * 字段名）：那种写法是**方括号包着一个字符串字面量**，而 `tools/check-dom.ts`
+ * 把全文里所有这种形状都当成 DOM id 清单 —— 于是它会报出一个并不存在的 id。
+ * 这条注释本身也踩过一次：把那个写法原样写进说明里，一样会被扫到。
+ * 与 `ROLE_ORDER` 那里记的是同一个坑。
+ */
+function readTplFromUi(): RuleTemplates {
+  // 先保证编辑器存在：这个函数会在 `syncStrategyUi` 之前被调用到
+  // （模式切到单人时要把当前这一栏落盘），那时六个框可能还没建出来
+  buildTplEditor();
+  const out = {} as RuleTemplates;
+  for (const key of TEMPLATE_KEYS) {
+    out[key] = (tplBox(key).querySelector("textarea") as HTMLTextAreaElement).value;
+  }
+  return out;
 }
 
 function syncStrategyUi(): void {
@@ -2052,6 +2280,7 @@ function syncStrategyUi(): void {
   $("thresholdVal").textContent = `${Math.round(s.threshold * 100)}%`;
   $("thresholdRow").style.display = s.strategy === "threshold" ? "" : "none";
   $<HTMLSelectElement>("inpChannel").value = s.channel;
+  syncTplEditor(s);
   syncRoleTabs();
 }
 
@@ -2059,6 +2288,7 @@ function applyRoleSettings(): void {
   const s = store.roles[state.role];
   s.ruleNote = $<HTMLTextAreaElement>("ruleNote").value;
   s.strategyHint = $<HTMLTextAreaElement>("hintText").value;
+  s.templates = readTplFromUi();
   s.predictOutcome = $<HTMLInputElement>("inpPredict").checked;
   s.detectPatterns = $<HTMLInputElement>("inpDetect").checked;
   s.strategy = $<HTMLSelectElement>("inpStrategy").value as RoleSettings["strategy"];
@@ -2070,6 +2300,8 @@ function applyRoleSettings(): void {
 }
 
 function bindStrategySettings(): void {
+  // 六个模板的 textarea 不是静态 HTML（由 `buildTplEditor` 现建），
+  // 它们的事件在那边一并绑上（同一条 `applyRoleSettings` 路径）
   for (const id of ["ruleNote", "hintText", "inpPredict", "inpDetect", "inpStrategy", "inpChannel"]) {
     $(id).addEventListener("change", applyRoleSettings);
   }
@@ -2838,6 +3070,7 @@ function boot(): void {
     "board", "chart", "chartBox", "momentum", "momentumBox", "heat", "heatBox",
     "led", "status", "cost", "avgCost", "lat", "backend",
     "sAlive", "sRatio", "sTurn", "sMax", "sMin", "decision", "dTurn",
+    "lgdDeath", "subTitle", "memDesc", "deathWinLbl", "apiRoleNote", "tplList",
     "bToggle", "bStep", "bNew", "bClearBoard", "drawHint", "bResult", "pace", "paceVal",
     "bLang", "langLbl", "bGame", "bStrategy", "bApi", "bLog", "bArchive",
     "scrim", "dGame", "dStrategy", "dApi", "dLog", "dArchive", "toast", "fileInput",
