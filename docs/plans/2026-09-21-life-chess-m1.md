@@ -1352,11 +1352,20 @@ export interface Termination {
 /** 终局判定需要的不只是当前棋盘 —— 防抖要用到占比历史 */
 export interface GameSnapshot {
   readonly board: Board;
+  readonly topology: Topology;   // ← 算后继状态要用（repeatedBlocked 检测）
   readonly turn: number;
-  /** 从最早到最近排列的「活细胞占比」，长度 = 已进行的回合数 */
+  /**
+   * **此前各回合**的活细胞占比，从最早到最近。
+   * 刻意**不含当前局面** —— 当前占比由 `aliveCount(board) / (cols * rows)` 现算，
+   * 单一来源。若把当前占比也塞进来，就有了两份可以互相矛盾的真相。
+   */
   readonly ratioHistory: readonly number[];
 }
 ```
+
+**防抖的算法**：算 `trailingRun([...ratioHistory, 当前占比], pred)` —— 从末尾往前数连续满足条件的个数。当前这一代是刚刚演化完的，所以它必须参与计数，但通过现算而不是通过历史数组。
+
+**`seen` 由调用方构造**，`classifyTermination` 只读它。函数内部要算「当前行动方的每个合法落点的后继是否都落在 `seen` 里」，因此**必须能拿到 topology**（这就是上面加那个字段的原因）。
 
 `classifyTermination(snap, role, rules, seen): Termination | null`。
 
