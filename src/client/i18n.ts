@@ -233,6 +233,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.verified": "已实测可用。",
     "backend.unverified": "未经实测：",
     "backend.unverifiedTag": "（未实测）",
+    "backend.unreachableTag": "（当前部署下不可用）",
+    "backend.unreachableNote":
+      "这条后端在本站根本走不通：它需要一个服务端来持有密钥，而当前是**纯静态托管**、又没有配远端地址。选一条「直连」后端并自备密钥即可继续；或者把它部署到本机 / Vercel（那两种形态下代理是同源的，不需要额外配置）。",
     "backend.modelManaged": "由本站指定",
     "backend.modelManagedHint": "该后端的模型由本站服务端决定，不可更改",
     "backend.modelPlaceholder": "留空即用默认模型 {model}",
@@ -256,6 +259,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "status.quota": "额度不足",
     "status.apiFail": "调用失败",
     "status.costs": "成本按 2026-09 的价目表估算",
+    "status.backendUnreachable": "这条后端在当前部署下走不通",
 
     /* ---------- 终局 ---------- */
     "over.gameOver": "对局结束",
@@ -273,6 +277,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "over.skip": "跳过这一回合，继续",
     "over.quotaBody": "额度不足：{msg}",
     "over.failedTurn": "第 {n} 回合没有跑成",
+    "over.backendTitle": "这条后端在当前部署下走不通",
+    "over.goApi": "去设置后端",
+    "over.halt": "暂停对局",
 
     /* ---------- 终局原因 ---------- */
     "term.lifeWinRatio": "存活占比连续 {n} 回合 ≥ {ratio} —— 生之执获胜",
@@ -281,6 +288,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "term.noLegalCellDeath": "死之执把棋盘清空了（对方一格都翻不动）—— 死之执获胜",
     "term.repeatBlocked": "整盘推不动：此后任何落子组合都会走到见过的局面",
     "term.turnLimit": "到达回合上限 {n}，仍未分出胜负",
+
+    /* ---------- 界面上自造的错误（不来自上游）---------- */
+    "err.backendUnreachable":
+      "{role} 用的「{label}」需要一个服务端来持有密钥，而当前是纯静态托管、且没有配远端地址 —— 这条请求根本发不出去，所以**没有重试按钮**。换一条「直连」后端（自己带密钥）即可继续。",
 
     /* ---------- 决策理由（resolveDecision 的 reasonKey）---------- */
     "reason.noProb": "回包里没有概率分布，取第一个合法格",
@@ -625,6 +636,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.verified": "Verified working.",
     "backend.unverified": "Not verified: ",
     "backend.unverifiedTag": " (unverified)",
+    "backend.unreachableTag": " (unavailable in this deployment)",
+    "backend.unreachableNote":
+      "This backend cannot work here: it needs a server to hold the key, and this is a **purely static** deployment with no remote address configured. Pick a direct backend and bring your own key, or deploy to localhost / Vercel (there the proxy is same-origin and needs no extra configuration).",
     "backend.modelManaged": "chosen by this site",
     "backend.modelManagedHint": "This backend's model is chosen server-side and cannot be changed",
     "backend.modelPlaceholder": "Leave empty to use the default model {model}",
@@ -648,6 +662,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "status.quota": "Out of quota",
     "status.apiFail": "Call failed",
     "status.costs": "Cost estimated from the 2026-09 price list",
+    "status.backendUnreachable": "This backend cannot work in this deployment",
 
     /* ---------- End of game ---------- */
     "over.gameOver": "Game over",
@@ -665,6 +680,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "over.skip": "Skip this turn and continue",
     "over.quotaBody": "Out of quota: {msg}",
     "over.failedTurn": "Turn {n} did not complete",
+    "over.backendTitle": "This backend cannot work in this deployment",
+    "over.goApi": "Go configure a backend",
+    "over.halt": "Pause the game",
 
     /* ---------- Termination reasons ---------- */
     "term.lifeWinRatio": "Live ratio held ≥ {ratio} for {n} turns — Life wins",
@@ -673,6 +691,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "term.noLegalCellDeath": "Death emptied the board (Life has no legal cell) — Death wins",
     "term.repeatBlocked": "The position can no longer move: every combination leads back to a seen position",
     "term.turnLimit": "Reached the {n}-turn limit without a winner",
+
+    /* ---------- Errors invented by the UI (not from upstream) ---------- */
+    "err.backendUnreachable":
+      "The backend “{label}” used by {role} needs a server to hold the key, but this is a purely static deployment with no remote address configured — the request cannot even leave, which is why there is **no retry button**. Switch to a direct backend and bring your own key.",
 
     /* ---------- Decision reasons (resolveDecision's reasonKey) ---------- */
     "reason.noProb": "No probability distribution in the response; taking the first legal cell",

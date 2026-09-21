@@ -41,6 +41,7 @@ import type { DecisionRequest, DecisionResult } from "../shared/backend.js";
 import {
   BACKENDS,
   createBackend,
+  isBackendReachable,
   isStaticHosting,
   type BackendId,
   type ClientConfig,
@@ -543,6 +544,14 @@ interface RoleOutcome {
   readonly error: string;
   /** 上游报的额度 / 鉴权问题 —— 它要的是「换后端」而不是「重试」 */
   readonly quotaExhausted: boolean;
+  /**
+   * 这条后端在当前部署下**根本走不通**（静态托管 + 未配远端地址）。
+   *
+   * 与 `quotaExhausted` 分开：那一条是「上游说不行」，这一条是「连请求都没发出去」。
+   * 把它并进「调用失败」会让用户去点重试，而重试永远不会成功 ——
+   * 这与配额那条是同一个理由：**用户能采取的行动不同，提示就该不同**。
+   */
+  readonly unreachable: boolean;
 }
 
 /** 本回合双方各自的一条决策读数，供日志与决策面板共用 */
@@ -564,7 +573,7 @@ function median(xs: number[]): number {
  */
 async function evaluateRole(attempt: RoleAttempt): Promise<RoleOutcome> {
   const { role, settings } = attempt;
-  const failed = (e: unknown): RoleOutcome => {
+  const failed = (e: unknown, unreachable = false): RoleOutcome => {
     const err = e as Error & { quotaExhausted?: boolean };
     return {
       ok: false,
@@ -576,16 +585,33 @@ async function evaluateRole(attempt: RoleAttempt): Promise<RoleOutcome> {
       belowThreshold: false,
       error: err.message,
       quotaExhausted: e instanceof JevError ? e.quotaExhausted : err.quotaExhausted === true,
+      unreachable,
     };
   };
 
+  // 地址解析不出来 = 这条后端在这个部署形态下根本不存在（静态托管 + 未配远端地址）。
+  // **在出发之前就失败**：真发出去只会得到一个 404，而 404 与「后端挂了」在界面上
+  // 长得一模一样，用户会去点重试。
+  const backend = createBackend(clientConfigOf(role), {
+    retry: retryPolicy(),
+    hooks: {
+      onRetry: (n, _err, delay) => setLed("busy", "status.retrying", { n, s: (delay / 1000).toFixed(1) }),
+    },
+  });
+  if (!backend) {
+    return failed(
+      new Error(
+        t("err.backendUnreachable", {
+          role: roleLabel(role),
+          label: t(BACKENDS[settings.provider].labelKey),
+        }),
+      ),
+      true,
+    );
+  }
+
   try {
-    const res = await createBackend(clientConfigOf(role), {
-      retry: retryPolicy(),
-      hooks: {
-        onRetry: (n, _err, delay) => setLed("busy", "status.retrying", { n, s: (delay / 1000).toFixed(1) }),
-      },
-    }).evaluate(attempt.request);
+    const res = await backend.evaluate(attempt.request);
 
     const probs = parseAnswers(attempt.channel, res.answers, state.board, role);
     const r = resolveDecision(probs, state.board, role, settings.strategy, settings.threshold);
@@ -600,6 +626,7 @@ async function evaluateRole(attempt: RoleAttempt): Promise<RoleOutcome> {
       belowThreshold: r.belowThreshold,
       error: "",
       quotaExhausted: false,
+      unreachable: false,
     };
   } catch (e) {
     console.error(e);
@@ -678,6 +705,7 @@ async function doTurn(): Promise<void> {
     state.busy = false;
     const first = failed[0];
     const quota = outcomes.some((o) => o.quotaExhausted);
+    const unreachable = outcomes.some((o) => o.unreachable);
 
     pushLog({
       turn: state.turn + 1,
@@ -689,6 +717,34 @@ async function doTurn(): Promise<void> {
       netGrowth: 0,
       failed: true,
     });
+
+    if (unreachable) {
+      // 配置问题，不是故障：重试没有意义，所以这一条路径**不给重试按钮**
+      setLed("err", "status.backendUnreachable");
+      showOverlay(t("over.backendTitle"), first.error, true, [
+        {
+          label: t("over.goApi"),
+          fn: () => {
+            hideOverlay();
+            syncApiUi();
+            openDrawer("dApi");
+          },
+          primary: true,
+        },
+        {
+          // 「暂停」而不是「跳过这一回合」：跳过意味着下一回合还会再试一次，
+          // 而配置问题不会自己好 —— 那个标签会把人引向一个必然再次失败的按钮
+          label: t("over.halt"),
+          fn: () => {
+            hideOverlay();
+            state.running = false;
+            syncRunButton();
+            setLed("", "status.paused");
+          },
+        },
+      ]);
+      return;
+    }
 
     if (quota) {
       setLed("err", "status.quota");
@@ -1518,6 +1574,16 @@ function syncRoleTabs(): void {
     b.classList.toggle("on", role === state.role);
   }
   $("roleHint").textContent = t("strategy.perRoleNote");
+
+  // 两个「复制到另一方」按钮的**方向**写在标签里，所以它们不是静态文案：
+  // 既随语言变，也随当前选中的玩家变。写在 HTML 里会得到一句永远中文、
+  // 且永远不说方向的提示 —— 那正是 relanguage() 要消灭的那类残留。
+  const label = t("strategy.sync", {
+    from: roleLabel(state.role),
+    to: roleLabel(other(state.role)),
+  });
+  $("bStrategySync").textContent = label;
+  $("bApiSync").textContent = label;
 }
 
 function syncStrategyUi(): void {
@@ -1628,7 +1694,14 @@ function fillBackendOptions(): void {
     o.value = id;
     // 开箱即用的后端不加「已验证」标记 —— 那是在暗示它背后有可验证的第三方服务
     const name = t(b.labelKey);
-    o.textContent = b.needsKey ? `${name}${b.verified ? " ✓" : t("backend.unverifiedTag")}` : name;
+    // ★ 地址走不通的（静态托管 + 未配远端地址）**置灰**，不藏起来。
+    // 藏起来会让人以为「这个项目没有免费试用」，而它其实只是**在当前部署形态下**
+    // 走不通 —— 换到本机或 Vercel 就有了。留着并写明原因，用户才知道该怎么修。
+    const reachable = isBackendReachable(b.base);
+    o.disabled = !reachable;
+    o.textContent =
+      (b.needsKey ? `${name}${b.verified ? " ✓" : t("backend.unverifiedTag")}` : name) +
+      (reachable ? "" : t("backend.unreachableTag"));
     selBackend.appendChild(o);
   }
   selBackend.value = keep;
@@ -1639,7 +1712,10 @@ function updateBackendLabel(): void {
   const s = store.roles[state.role];
   const b = BACKENDS[s.provider];
   const name = t(b.labelKey);
-  const label = b.needsKey || !staticHost ? name : t("backend.remoteSuffix", { label: name });
+  const reachable = isBackendReachable(s.base);
+  const label =
+    (b.needsKey || !staticHost ? name : t("backend.remoteSuffix", { label: name })) +
+    (reachable ? "" : t("backend.unreachableTag"));
   const el = $("backend");
 
   // 代管后端的模型是本站服务端的内部选择：用户既改不了，也不该看到 ——
@@ -1663,9 +1739,11 @@ function applyBackendGating(provider: BackendId): void {
 
   const note = t(b.noteKey);
   const el = $("backendNote");
-  el.textContent = b.verified
-    ? t("backend.verified") + (b.needsKey ? note : "")
-    : t("backend.unverified") + note;
+  el.textContent = isBackendReachable(b.base)
+    ? b.verified
+      ? t("backend.verified") + (b.needsKey ? note : "")
+      : t("backend.unverified") + note
+    : t("backend.unreachableNote");
   el.style.display = el.textContent ? "" : "none";
 
   if (b.needsKey) {
