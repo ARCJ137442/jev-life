@@ -135,10 +135,13 @@ const DICT: Record<Lang, Record<string, string>> = {
     "decision.flip": "翻 ({row}, {col})",
 
     /* ---------- 游戏抽屉 ---------- */
+    // ★ 这一段是**玩法简介**。「设置会进 state、分布应当变化」那件事由下面的
+    // `game.desc` 说 —— 两处都说同一件事的话，改了一处另一处就成了假话。
+    // 胜负线不写在这里：它随模式换说法，而且是下面「终局规则」那一节的正文
     "game.noteInput":
-      "与 2048 相反：生命棋的规则不自明，所以这里的每一项都会写进发给 Jev 的 state —— 改完之后概率分布**应当**变化；若没变，那才是 bug。",
+      "生命棋：每回合翻一格，然后整盘按 B3/S23 演化一代 —— 死格周围恰好 3 个活细胞则诞生，活细胞周围 2 或 3 个则存活，其余死亡。你的每一次干预都会在混沌系统里产生不可完全预测的后果。",
     "game.desc":
-      "这些是**对局级**设置：两边不同就不是同一个游戏。注意生命棋与 2048 相反 —— 规则不自明，所以这里改任何东西都会进入 Jev 的输入，概率分布应当随之变化。",
+      "这些是对局级设置：两边不同就不是同一个游戏。注意生命棋与 2048 相反 —— 规则不自明，所以这里改任何东西都会进入 Jev 的输入，概率分布应当随之变化。",
     "game.boardSize": "棋盘尺寸",
     "game.sizeHint":
       "三档预设各带一整套标定过的参数（规则、回合上限、开局库）；下面是自由尺寸 —— 长与宽各自 2~16，想试别的尺寸时用。",
@@ -174,7 +177,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     // ★ 单人局里那两条线**仍然有意义**，但含义换了：没有对手，跌破死之执那条线
     // 说的是「棋盘死绝」。措辞跟着换，否则界面会把一个不在场的人写进规则里
     "game.rulesNoteSolo":
-      "胜负线：玩家 ≥ {life}% 连续 {ls} 回合获胜；占比 ≤ {death}% 连续 {ds} 回合则**棋盘死绝**（单人局没有对手，那不是「对手赢了」）。清空 / 占满棋盘、整盘推不动都会立即终局。",
+      "胜负线：玩家 ≥ {life}% 连续 {ls} 回合获胜；占比 ≤ {death}% 连续 {ds} 回合则棋盘死绝（单人局没有对手，那不是「对手赢了」）。清空 / 占满棋盘、整盘推不动都会立即终局。",
     "game.rulesInvertedSolo":
       "⚠ 棋盘死绝线不低于玩家获胜线：判终局时玩家那条先判，倒挂会让棋盘死绝这条实际上永远轮不到。",
     "game.turnLimitWarn": "回合上限必须是 1 以上的整数",
@@ -197,7 +200,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.openingHint": "开局库按尺寸分级 —— 先定尺寸，再选开局。改动能立即重开一局。",
     "game.customOpening": "自定义（空白棋盘）",
     "game.customOpeningNote":
-      "空棋盘起步，自己画。开始对弈之前点格子即翻转；画过之后这里会一直标着「自定义」，不会谎称这局用的是某个预设。",
+      "空棋盘起步，自己画。开始之前点格子即翻转；画过之后这里会一直标着「自定义」，不会谎称这局用的是某个预设。",
     "game.noOpeningLib": "该尺寸不是预设，没有开局库 —— 请从空白棋盘自己画。",
     "game.reset": "恢复默认",
     "game.resetTitle": "尺寸、拓扑、终局规则、开局、动效回到出厂值",
@@ -205,7 +208,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- 策略抽屉 ---------- */
     "strategy.desc":
-      "分两部分：上下文决定 Jev 看到什么，规则决定拿到答案后怎么落实。每一项都是**玩家级**的 —— 两边可以配得不一样。",
+      "分两部分：上下文决定 Jev 看到什么，规则决定拿到答案后怎么落实。每一项都是玩家级的 —— 两边可以配得不一样。",
     "strategy.perRoleNote":
       "后端 / 模型 / 上下文都绑在单个玩家上：跨模型对照（Jev 当生执、LLM 当死执）正是靠它才配得出来。",
     "strategy.sync": "把「{from}」的设置复制给「{to}」",
@@ -215,17 +218,17 @@ const DICT: Record<Lang, Record<string, string>> = {
     "strategy.ctxNote": "改动会进入请求，影响 Jev 的判断 —— 效果看「概率分布」",
     "strategy.ruleNoteLabel": "规则说明（补充）→ rules.rule_note",
     "strategy.ruleNoteDesc":
-      "规则**正文**由上面那六份模板渲染（尺寸、拓扑、胜负线都在里面），所以这里只填**补充**。留空则整个字段不出现。",
+      "规则正文由上面那六份模板渲染（尺寸、拓扑、胜负线都在里面），所以这里只填补充。留空则整个字段不出现。",
     // ★ 单人模式：整个玩家栏都是死配置（`syncModeUi()` 会把它停用）。
     // 这句话是停用的**理由** —— 不写出来，用户只会以为那一栏坏了
     "strategy.roleHintSolo":
-      "单人局里只有一个行动方，所以**没有第二栏** —— 它描述的是一栏没有消费者的设置。设置本身仍在存档里，切回「双人对弈」就能接着编辑。",
+      "单人局里只有一个行动方，所以没有第二栏 —— 它描述的是一栏没有消费者的设置。设置本身仍在存档里，切回「双人对弈」就能接着编辑。",
 
     /* ---------- ★ 规则说明书模板（策略 › 上下文）---------- */
     "tpl.section": "规则说明书（正文）",
     "tpl.sectionNote": "发给模型的 rules 六项，各自一份可编辑模板",
     "tpl.intro":
-      "这六项就是发给 Jev 的 rules 正文。措辞随你写；带双花括号的名字是**占位符**，由当前设置与局面自动填充 —— 数值永远来自设置，所以「本局共 90 回合」这类话不必写、写死了就成了一句假话。删掉占位符不会报错，但模型会少知道一件事，下面会逐条指出来（只提示，不阻止）。留空则回到出厂措辞。",
+      "这六项就是发给 Jev 的 rules 正文。措辞随你写；带双花括号的名字是占位符，由当前设置与局面自动填充 —— 数值永远来自设置，所以「本局共 90 回合」这类话不必写、写死了就成了一句假话。删掉占位符不会报错，但模型会少知道一件事，下面会逐条指出来（只提示，不阻止）。留空则回到出厂措辞。",
     "tpl.role_statement": "角色陈述 → rules.role_statement",
     "tpl.objective": "计分方式 → rules.objective",
     "tpl.horizon": "回合视野 → rules.horizon",
@@ -266,14 +269,14 @@ const DICT: Record<Lang, Record<string, string>> = {
     "tpl.why.winnerLine": "获胜条件那一行（含占比阈值与防抖轮数），措辞随模式变 —— 单人局里写的是「你获胜」",
     "tpl.why.loserLine": "落败条件那一行。单人局里它是「你落败 —— 棋盘死绝」；照搬双人那句就是把一个不在场的人写进规则",
     "tpl.why.endByWinLine": "终局条件第 1 条（胜负线触发终局），措辞随模式变",
-    "tpl.why.endByBoardFull": "终局条件第 2 条（棋盘全死 / 全活）。单人局里「全死」**不是**终局，照抄双人那条会让模型以为棋盘被清空就输了",
+    "tpl.why.endByBoardFull": "终局条件第 2 条（棋盘全死 / 全活）。单人局里「全死」不是终局，照抄双人那条会让模型以为棋盘被清空就输了",
     "tpl.why.endByStuck": "终局条件第 3 条（推不动了按占比判胜负）",
     "tpl.why.turnLimitEnd": "终局条件第 4 条（回合上限）。不设上限时它会整个换掉 —— 写「上限 ∞」等于凭空造一条规则",
     "strategy.hintLabel": "策略提示 → aids.strategy_hint",
     "strategy.hintDesc": "生命棋的知识（哪些是静物、滑翔机会飞）恰恰是这套实验想测量的东西，所以默认留空。",
     "strategy.predictLabel": "后果预测",
     "strategy.predictDesc":
-      "打开后把「这一手 + 演化一代」的活细胞数变化作为**背景**写进题面。只是背景：问的自始至终是长期价值，否则等于把答案写在题面上。",
+      "打开后把「这一手 + 演化一代」的活细胞数变化作为背景写进题面。只是背景：问的自始至终是长期价值，否则等于把答案写在题面上。",
     "strategy.memoryLabel": "记忆轮数 → recent_history",
     "strategy.memoryDesc": "把最近 n 回合的「局面 + 双方落点 + 净增长」一并发给 Jev。0 = 不加入。",
     // 单人局的记忆里**没有**死之执那一手（`TurnRecord.deathFlip` 整个不出现）
@@ -303,7 +306,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- API 抽屉 ---------- */
     "api.desc":
-      "怎么跟模型打交道：**选谁**（后端 / 模型 / 密钥）与**怎么谈**（重试、超时）。两者都影响 AI 玩家的表现，所以都在这一个抽屉里。",
+      "怎么跟模型打交道：选谁（后端 / 模型 / 密钥）与怎么谈（重试、超时）。两者都影响 AI 玩家的表现，所以都在这一个抽屉里。",
     "api.keySafety": "密钥安全",
     "api.keyNote":
       "只有选「直连」类后端时才需要填写。密钥仅存于当前页面的内存，刷新即清除，不会写入本地存储，也不会随存档导出。",
@@ -331,13 +334,13 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.freeTrial2Desc": "本站代管的第二份免费额度",
     "backend.llmFreeTrial": "LLM 免费试用 1",
     "backend.llmFreeTrialDesc":
-      "本站代管的免费 LLM 额度。它背后是一个通用的语言模型，由 broker 包装成 Jev 兼容接口 —— 对上层完全一样，只是**慢得多、要花 token**。选中它之后 API 抽屉里会多出四个调用配置。",
+      "本站代管的免费 LLM 额度。它背后是一个通用的语言模型，由 broker 包装成 Jev 兼容接口 —— 对上层完全一样，只是慢得多、要花 token。选中它之后 API 抽屉里会多出四个调用配置。",
     "backend.llmOpenai": "OpenAI 兼容 LLM（自备密钥）",
     "backend.llmOpenaiDesc":
-      "填一个说 OpenAI 兼容协议（`/chat/completions`）的地址，带上你自己的密钥。预置的是 DeepSeek 的端点，改成任何一家都行。**密钥只存在你这台浏览器里**：这条后端不经过本站服务端，请求从浏览器直发对方（也正因如此，对方必须允许跨域，否则会被浏览器拦下）。地址填版本根（如 `https://api.deepseek.com/v1`）或整条端点都可以。",
+      "填一个说 OpenAI 兼容协议（/chat/completions）的地址，带上你自己的密钥。预置的是 DeepSeek 的端点，改成任何一家都行。密钥只存在你这台浏览器里：这条后端不经过本站服务端，请求从浏览器直发对方（也正因如此，对方必须允许跨域，否则会被浏览器拦下）。地址填版本根（如 https://api.deepseek.com/v1）或整条端点都可以。",
     "backend.llmAnthropic": "Anthropic 兼容 LLM（自备密钥）",
     "backend.llmAnthropicDesc":
-      "填一个说 Anthropic 协议（`/messages`）的地址，带上你自己的密钥。**密钥只存在你这台浏览器里**，请求从浏览器直发对方。官方 api.anthropic.com 需要 `anthropic-dangerous-direct-browser-access` 头才允许跨域 —— 本项目已经替你带上，**官方端点与兼容端点都已实测跑通**。",
+      "填一个说 Anthropic 协议（/messages）的地址，带上你自己的密钥。密钥只存在你这台浏览器里，请求从浏览器直发对方。官方 api.anthropic.com 需要 anthropic-dangerous-direct-browser-access 头才允许跨域 —— 本项目已经替你带上，官方端点与兼容端点都已实测跑通。",
     "backend.vercel": "Vercel AI Gateway 直连",
     "backend.vercelDesc": "自己带密钥，额度归你掌控。",
     "backend.typesafe": "TypeSafe 官方",
@@ -355,7 +358,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.unverifiedTag": "（未实测）",
     "backend.unreachableTag": "（当前部署下不可用）",
     "backend.unreachableNote":
-      "这条后端在本站根本走不通：它需要一个服务端来持有密钥，而当前是**纯静态托管**、又没有配远端地址。选一条「直连」后端并自备密钥即可继续；或者把它部署到本机 / Vercel（那两种形态下代理是同源的，不需要额外配置）。",
+      "这条后端在本站根本走不通：它需要一个服务端来持有密钥，而当前是纯静态托管、又没有配远端地址。选一条「直连」后端并自备密钥即可继续；或者把它部署到本机 / Vercel（那两种形态下代理是同源的，不需要额外配置）。",
     "backend.modelManaged": "由本站指定",
     "backend.modelManagedHint": "该后端的模型由本站服务端决定，不可更改",
     "backend.modelPlaceholder": "留空即用默认模型 {model}",
@@ -391,8 +394,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "api.policyJson": "JSON 输出",
     "api.policyTool": "工具循环",
     "api.callPolicyNote":
-      "JSON 靠提示词约束形状、一次调用（实测快 2–4 倍）；工具循环靠 schema 强制形状、可多轮。两条都留着是因为**它本身就是可对照的变量**。",
-    "api.effortCoupling": "「否」与 `none` 是同一件事的两种说法，界面会自动保持一致。",
+      "JSON 靠提示词约束形状、一次调用（实测快 2–4 倍）；工具循环靠 schema 强制形状、可多轮。两条都留着是因为它本身就是可对照的变量。",
+    "api.effortCoupling": "「否」与 none 是同一件事的两种说法，界面会自动保持一致。",
 
     /* ---------- 页脚与状态 ---------- */
     "stats.total": "累计",
@@ -434,7 +437,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     // 单人局里同一个终局原因，赢家叫「玩家」
     "term.lifeWinRatioSolo": "存活占比连续 {n} 回合 ≥ {ratio} —— 你获胜",
     "term.noLegalCellSolo":
-      "你把棋盘占满了（一个死格都不剩）—— 你获胜。注意这**不是**「没棋可走就输」，而是你把自己的目标推到了极限",
+      "你把棋盘占满了（一个死格都不剩）—— 你获胜。注意这不是「没棋可走就输」，而是你把自己的目标推到了极限",
     "term.deathWinRatio": "存活占比连续 {n} 回合 ≤ {ratio} —— 死之执获胜",
     "term.noLegalCellLife": "生之执把棋盘占满了（对方一格都翻不动）—— 生之执获胜",
     "term.noLegalCellDeath": "死之执把棋盘清空了（对方一格都翻不动）—— 死之执获胜",
@@ -445,7 +448,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- 界面上自造的错误（不来自上游）---------- */
     "err.backendUnreachable":
-      "{role} 用的「{label}」需要一个服务端来持有密钥，而当前是纯静态托管、且没有配远端地址 —— 这条请求根本发不出去，所以**没有重试按钮**。换一条「直连」后端（自己带密钥）即可继续。",
+      "{role} 用的「{label}」需要一个服务端来持有密钥，而当前是纯静态托管、且没有配远端地址 —— 这条请求根本发不出去，所以没有重试按钮。换一条「直连」后端（自己带密钥）即可继续。",
 
     /* ---------- 决策理由（resolveDecision 的 reasonKey）---------- */
     "reason.noProb": "回包里没有概率分布，取第一个合法格",
@@ -687,7 +690,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- Game drawer ---------- */
     "game.noteInput":
-      "The opposite of 2048: in Life Chess the rules are not self-evident, so everything here is written into the state sent to Jev — after a change the probability distribution *should* change; if it does not, that is the bug.",
+      "Life Chess: each turn you flip one cell, then the whole board advances one generation under B3/S23 — a dead cell with exactly 3 live neighbours is born, a live cell with 2 or 3 survives, everything else dies. Every intervention ripples through a chaotic system in ways you cannot fully predict.",
     "game.desc":
       "These are game-level settings: if the two sides disagreed on them it would not be the same game. Note that Life Chess is the opposite of 2048 — the rules are not self-evident, so anything changed here enters Jev's input and the distribution should change.",
     "game.boardSize": "Board size",
@@ -715,14 +718,14 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.rules": "End-of-game rules",
     "game.turnLimit": "Turn limit",
     "game.turnLimitPh": "empty = no limit",
-    "game.turnLimitHint": "If nobody has won by then, the game is a draw. **Leave it empty for no limit** — the game runs until someone wins, nobody can move, or the position is stuck. It is written into the state sent to Jev, so changing it restarts the game immediately — changing the rules mid-game would make the two halves incomparable.",
+    "game.turnLimitHint": "If nobody has won by then, the game is a draw. Leave it empty for no limit — the game runs until someone wins, nobody can move, or the position is stuck. It is written into the state sent to Jev, so changing it restarts the game immediately — changing the rules mid-game would make the two halves incomparable.",
     "game.rulesNote":
       "Win lines: Life holds ≥ {life}% for {ls} turns; Death holds ≤ {death}% for {ds} turns. Emptying or filling the board, or a position that can no longer move, ends the game immediately.",
     "game.rulesUncalibrated": "⚠ These thresholds are placeholders and have not been calibrated by benchmark runs — they are editable so you can experiment, not because they are now trustworthy.",
     "game.rulesInverted":
       "⚠ Death's line is not below Life's: the Life condition is tested first, so an inverted pair means Death's line can never actually trigger.",
     "game.rulesNoteSolo":
-      "Win lines: the player wins at ≥ {life}% held for {ls} turns; a ratio ≤ {death}% held for {ds} turns means **the board died out** (there is no opponent in a solo game, so it is not “the opponent won”). Emptying or filling the board, or a position that can no longer move, ends the game immediately.",
+      "Win lines: the player wins at ≥ {life}% held for {ls} turns; a ratio ≤ {death}% held for {ds} turns means the board died out (there is no opponent in a solo game, so it is not “the opponent won”). Emptying or filling the board, or a position that can no longer move, ends the game immediately.",
     "game.rulesInvertedSolo":
       "⚠ The died-out line is not below the player's win line: the win condition is tested first, so an inverted pair means the died-out line can never actually trigger.",
     "game.turnLimitWarn": "The turn limit must be either empty (no limit) or an integer of at least 1",
@@ -763,15 +766,15 @@ const DICT: Record<Lang, Record<string, string>> = {
     "strategy.ctxNote": "Changes enter the request and affect Jev's judgement — watch the probability distribution",
     "strategy.ruleNoteLabel": "Rule notes (supplementary) → rules.rule_note",
     "strategy.ruleNoteDesc":
-      "The **body** of the rules is rendered from the six templates above (size, topology and win lines are all in there), so this field is for supplements only. Leave it empty and the field disappears entirely.",
+      "The body of the rules is rendered from the six templates above (size, topology and win lines are all in there), so this field is for supplements only. Leave it empty and the field disappears entirely.",
     "strategy.roleHintSolo":
-      "A solo game has only one actor, so there is **no second column** — it describes a column with no consumer. The settings stay in the archive; switch back to “Duel” to edit them.",
+      "A solo game has only one actor, so there is no second column — it describes a column with no consumer. The settings stay in the archive; switch back to “Duel” to edit them.",
 
     /* ---------- ★ Rule templates (Strategy › Context) ---------- */
     "tpl.section": "Rule sheet (body)",
     "tpl.sectionNote": "The six rules items sent to the model, each an editable template",
     "tpl.intro":
-      "These six items are the body of the rules sent to Jev. Write the wording however you like; names in double braces are **placeholders** filled from the current settings and position — values always come from settings, so “90 turns this game” need not be written out, and hard-coding it would make it a lie. Deleting a placeholder raises no error, but the model then knows one thing less; the notes below say which (a warning only, never a block). Empty falls back to the factory wording.",
+      "These six items are the body of the rules sent to Jev. Write the wording however you like; names in double braces are placeholders filled from the current settings and position — values always come from settings, so “90 turns this game” need not be written out, and hard-coding it would make it a lie. Deleting a placeholder raises no error, but the model then knows one thing less; the notes below say which (a warning only, never a block). Empty falls back to the factory wording.",
     "tpl.role_statement": "Role statement → rules.role_statement",
     "tpl.objective": "Scoring → rules.objective",
     "tpl.horizon": "Horizon → rules.horizon",
@@ -806,7 +809,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "tpl.why.winnerLine": "the winning line (threshold plus debounce turns); its wording follows the mode and reads “you win” in a solo game",
     "tpl.why.loserLine": "the losing line. In a solo game it reads “you lose — the board died out”; copying the duel wording puts a player who is not there into the rules",
     "tpl.why.endByWinLine": "end condition 1 (a win line ends the game); its wording follows the mode",
-    "tpl.why.endByBoardFull": "end condition 2 (board all dead / all alive). In a solo game “all dead” is **not** an ending, and copying the duel text makes the model think an emptied board is a loss",
+    "tpl.why.endByBoardFull": "end condition 2 (board all dead / all alive). In a solo game “all dead” is not an ending, and copying the duel text makes the model think an emptied board is a loss",
     "tpl.why.endByStuck": "end condition 3 (stuck position judged by the ratio)",
     "tpl.why.turnLimitEnd": "end condition 4 (turn limit). With no limit it is replaced entirely — writing “limit ∞” invents a rule out of nothing",
     "strategy.hintLabel": "Strategy hint → aids.strategy_hint",
@@ -873,10 +876,10 @@ const DICT: Record<Lang, Record<string, string>> = {
       "A free LLM quota hosted by this site. Behind it is a general-purpose language model, wrapped into a Jev-compatible interface by the broker — identical from above, just far slower and metered in tokens. Selecting it adds four call settings to the API drawer.",
     "backend.llmOpenai": "OpenAI-compatible LLM (bring your own key)",
     "backend.llmOpenaiDesc":
-      "Point this at any address speaking the OpenAI-compatible protocol (`/chat/completions`) and supply your own key. It ships prefilled with DeepSeek's endpoint; swap in any other. **The key lives only in this browser**: this backend never touches this site's server, so requests go straight from your browser to the provider (which is also why the provider must allow cross-origin calls, or the browser will block them). Either the version root (`https://api.deepseek.com/v1`) or the full endpoint URL works.",
+      "Point this at any address speaking the OpenAI-compatible protocol (/chat/completions) and supply your own key. It ships prefilled with DeepSeek's endpoint; swap in any other. The key lives only in this browser: this backend never touches this site's server, so requests go straight from your browser to the provider (which is also why the provider must allow cross-origin calls, or the browser will block them). Either the version root (https://api.deepseek.com/v1) or the full endpoint URL works.",
     "backend.llmAnthropic": "Anthropic-compatible LLM (bring your own key)",
     "backend.llmAnthropicDesc":
-      "Point this at any address speaking the Anthropic protocol (`/messages`) and supply your own key. **The key lives only in this browser**, and requests go straight from your browser to the provider. The official api.anthropic.com additionally requires the `anthropic-dangerous-direct-browser-access` header to allow cross-origin calls — this project sends it for you, and **both the official and compatible endpoints have been tested end to end**.",
+      "Point this at any address speaking the Anthropic protocol (/messages) and supply your own key. The key lives only in this browser, and requests go straight from your browser to the provider. The official api.anthropic.com additionally requires the anthropic-dangerous-direct-browser-access header to allow cross-origin calls — this project sends it for you, and both the official and compatible endpoints have been tested end to end.",
     "backend.vercel": "Vercel AI Gateway (direct)",
     "backend.vercelDesc": "Bring your own key; the quota is yours to control.",
     "backend.typesafe": "TypeSafe official",
@@ -894,7 +897,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.unverifiedTag": " (unverified)",
     "backend.unreachableTag": " (unavailable in this deployment)",
     "backend.unreachableNote":
-      "This backend cannot work here: it needs a server to hold the key, and this is a **purely static** deployment with no remote address configured. Pick a direct backend and bring your own key, or deploy to localhost / Vercel (there the proxy is same-origin and needs no extra configuration).",
+      "This backend cannot work here: it needs a server to hold the key, and this is a purely static deployment with no remote address configured. Pick a direct backend and bring your own key, or deploy to localhost / Vercel (there the proxy is same-origin and needs no extra configuration).",
     "backend.modelManaged": "chosen by this site",
     "backend.modelManagedHint": "This backend's model is chosen server-side and cannot be changed",
     "backend.modelPlaceholder": "Leave empty to use the default model {model}",
@@ -931,7 +934,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "api.policyTool": "Tool loop",
     "api.callPolicyNote":
       "JSON constrains the shape through the prompt in a single call (measured 2–4× faster); the tool loop enforces it with a schema and can take several rounds. Both are kept because the difference is itself a variable worth comparing.",
-    "api.effortCoupling": "“No” and `none` are two ways of saying the same thing; the UI keeps them in step.",
+    "api.effortCoupling": "“No” and none are two ways of saying the same thing; the UI keeps them in step.",
 
     /* ---------- Footer and status ---------- */
     "stats.total": "Total",
@@ -972,7 +975,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "term.lifeWinRatio": "Live ratio held ≥ {ratio} for {n} turns — Life wins",
     "term.lifeWinRatioSolo": "Live ratio held ≥ {ratio} for {n} turns — you win",
     "term.noLegalCellSolo":
-      "You filled the board — not a single dead cell left — and you win. Note this is **not** “no move left, so you lose”; it is your own objective pushed to its limit",
+      "You filled the board — not a single dead cell left — and you win. Note this is not “no move left, so you lose”; it is your own objective pushed to its limit",
     "term.deathWinRatio": "Live ratio held ≤ {ratio} for {n} turns — Death wins",
     "term.noLegalCellLife": "Life filled the board (Death has no legal cell) — Life wins",
     "term.noLegalCellDeath": "Death emptied the board (Life has no legal cell) — Death wins",
@@ -983,7 +986,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- Errors invented by the UI (not from upstream) ---------- */
     "err.backendUnreachable":
-      "The backend “{label}” used by {role} needs a server to hold the key, but this is a purely static deployment with no remote address configured — the request cannot even leave, which is why there is **no retry button**. Switch to a direct backend and bring your own key.",
+      "The backend “{label}” used by {role} needs a server to hold the key, but this is a purely static deployment with no remote address configured — the request cannot even leave, which is why there is no retry button. Switch to a direct backend and bring your own key.",
 
     /* ---------- Decision reasons (resolveDecision's reasonKey) ---------- */
     "reason.noProb": "No probability distribution in the response; taking the first legal cell",
