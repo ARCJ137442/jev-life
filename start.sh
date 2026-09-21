@@ -1,20 +1,30 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # 编译并启动 生命棋 × Jev。
 #
 # 不依赖 npm —— Termux 下 npm/npx 的 shebang 指向不存在的 /usr/bin/env，
 # 直接调用会失败，所以这里用 node 执行 tsc 的 JS 入口绕开它。
 #
-# ↑ 那个坑只在**调用 npm 时**成立，与本文件自己的 shebang 无关。
-#   这里一度写着 `#!/data/data/com.termux/files/usr/bin/bash`（Termux 的
-#   私有路径），于是任何 Linux/macOS 上第一次 clone 的人执行 README 的
-#   「快速开始」，拿到的都是 bad interpreter —— 而 CI 跑的是逐条命令、
-#   从不调用本文件，所以这条路径**永远不会被 CI 暴露**。
-#   走 /usr/bin/env 是两台机器上都成立的那一种。
+# ── 为什么 shebang 是 /bin/sh，而不是 /usr/bin/env bash ─────────────
+#
+# 上面那条「/usr/bin/env 不存在」**对本文件自己同样成立** —— Termux 上
+# env 在 `$PREFIX/bin/env`，`/usr/bin/env` 根本没有。于是三种写法：
+#
+#   #!/data/data/com.termux/files/usr/bin/bash   → 只在 Termux 上成立
+#   #!/usr/bin/env bash                         → 在 Termux 上直接坏掉
+#   #!/bin/sh                                   → 两边都成立 ✓
+#
+# `/bin/sh` 是 POSIX 保证存在的路径，Android（Termux）/ Linux / macOS 上都有。
+# 代价是本文件必须守住 POSIX：正文里没有管道，所以 `set -o pipefail` 本来就
+# 是惰性的；而 dash（Debian/Ubuntu 的 /bin/sh）认不出这个选项，留着反而会在
+# 那些系统上当场崩。所以它被删掉了，不是「忘了加回来」。
+#
+# ⚠ CI 不会替你发现 shebang 的问题：ci.yml 跑的是 npm ci + 逐条命令，
+#   从不调用本文件。这条路径**只有「别人第一次 clone」时才走到**。
 #
 # 用法： ./start.sh [端口]
 #
-set -euo pipefail
+set -eu
 cd "$(dirname "$0")"
 
 TSC="node_modules/typescript/bin/tsc"
