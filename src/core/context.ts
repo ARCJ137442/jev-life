@@ -40,49 +40,20 @@
 import { aliveCount, flip, legalCells, lifeStep } from "./life.js";
 import { detectPatterns } from "./patterns.js";
 import type { DetectedPattern } from "./patterns.js";
+import { noulDiscriminator } from "../shared/types.js";
+import type { Question, Questions, TurnRecord } from "../shared/types.js";
 import type { Board, Cell, GameRules, Role, Topology } from "./types.js";
 
 /* ══════════════════════════════════════════════════════════════════
-   Jev 协议：最小集
+   Jev 协议
    ══════════════════════════════════════════════════════════════════
 
-   这几个类型在 2048 里住在 `src/shared/types.ts`，本仓库的 `src/shared/`
-   要到 T12 才建。先在这里定义**本模块真正用到的那几个**，T12 建好
-   `shared/types.ts` 之后搬过去、由那边统一导出（届时本模块改成 import）。
+   协议类型曾经**暂住在这里**（`src/shared/` 那时还没建）。T12 建出
+   `shared/types.ts` 后已经搬走，这里不留副本 —— 两份类型定义迟早会各自
+   演化（`jev-2048` 的 `Strategy` 就被定义了两遍），而它们对不上时不会报错。
 
-   刻意只搬最小的那几个：整份协议里还有 choice / score 的答案形状、usage、
-   重试策略等等，那些是 API 层的事，`core/` 不需要知道。 */
-
-/**
- * 布尔型问题的判别值。
- *
- * ⚠ **各网关的取值不一致**（2048 实测）：Vercel 自己封装时把 `noul` 改名成
- * `boolean`，官方 / OpenRouter / AI-ML-API 都是 `noul`。写死一个值会让另一
- * 半后端 400。`noul` 在本项目里是**第一次真的走**（2048 定义了判别函数但
- * 从未用过 —— 它主流程走的是 choice）。
- */
-export type NoulType = "noul" | "boolean";
-
-/** 某后端下布尔类型的实际判别值。默认（含未知后端）取 noul */
-export function noulDiscriminator(backend: string): NoulType {
-  return backend === "vercel" ? "boolean" : "noul";
-}
-
-/** noul 的 criteria 只能是 {true,false}；choice 是 map；score 是有序数组 */
-export type Criteria =
-  | Record<string, string>
-  | string[]
-  | { true: string; false: string };
-
-export interface Question {
-  readonly type: string;
-  readonly instructions: string;
-  /** 必填。缺失时上游直接 400: expected record, received undefined */
-  readonly criteria: Criteria;
-}
-
-/** questions 是 record（映射），不是数组。传数组报 expected record, received array */
-export type Questions = Record<string, Question>;
+   本模块只用到 `Question` / `Questions` / `noulDiscriminator` / `TurnRecord`
+   这几个；choice / score 的答案形状、usage、重试策略那些是 API 层的事。 */
 
 /* ══════════════════════════════════════════════════════════════════
    输入类型
@@ -135,25 +106,6 @@ export interface RoleContext {
 export const DEFAULT_ROLE_CONTEXT: RoleContext = {
   strategyHint: "",
 };
-
-/**
- * 一个回合的完整记录。
- *
- * 双方同时各翻一格、再演化一代，所以一回合**只有一个**净增长 —— 按玩家
- * 拆分是拆不出来的（两边同时落子），这也是它不再决定胜负之后仍然要留下的
- * 原因：跑分 CSV 里它是一项统计。
- */
-export interface TurnRecord {
-  readonly turn: number;
-  /** 回合结束（双方落子 + 演化一代）后的棋盘 */
-  readonly board: Board;
-  /** 本回合双方各自翻的格。落点必然不同格 —— 两边的合法集天然互斥 */
-  readonly lifeFlip: Cell;
-  readonly deathFlip: Cell;
-  readonly aliveCount: number;
-  /** 本回合的净增长 = 演化后活细胞数 − 演化前活细胞数 */
-  readonly netGrowth: number;
-}
 
 export interface StateInput {
   readonly board: Board;

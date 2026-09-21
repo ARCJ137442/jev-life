@@ -19,7 +19,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { DEFAULT_ROLE_CONTEXT, buildQuestions, buildState } from "../core/context.js";
-import type { Questions, RoleContext, StateInput, TurnRecord } from "../core/context.js";
+import type { RoleContext, StateInput } from "../core/context.js";
+// 协议类型与 TurnRecord 在 T12 搬去了 src/shared/types.ts（原地不留副本），
+// 所以这里也改成从新家取
+import type { Questions, TurnRecord } from "../shared/types.js";
 import { aliveCount, boardFromRows, flip, legalCells, lifeStep } from "../core/life.js";
 import type { Board, Cell, GameRules } from "../core/types.js";
 

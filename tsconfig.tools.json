@@ -17,9 +17,10 @@
     // （那边先编译再运行）。完整规矩见 tools/_load.ts 的文件头。
     "allowImportingTsExtensions": true
   },
-  "include": ["tools/**/*.ts"],
-  // seal-key.ts 是唯一一个排除项，而且是被迫的：它 import 的
-  // `../src/server/seal.ts` 要到 T12 才建立。这不是「它没问题所以跳过」，
-  // 是「它现在根本检查不了」—— T12 建出 seal.ts 之后必须删掉这行。
-  "exclude": ["tools/seal-key.ts"]
+  // 这里**没有 exclude**。曾经有一条 `"exclude": ["tools/seal-key.ts"]`，
+  // 那是被迫的：它 import 的 `../src/server/seal.ts` 要到 T12 才建立。
+  // T12 建出 seal.ts 之后这行必须删掉 —— 留着它，那个脚本的类型就没有
+  // 任何机器保证（Node 的 type-stripping 只擦类型、不校验），而它是个
+  // 安全工具。现在五份配置覆盖了全部源码，一个空转的排除项都不留。
+  "include": ["tools/**/*.ts"]
 }
