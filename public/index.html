@@ -520,7 +520,7 @@ textarea{resize:vertical}
                那时死之执没有一手棋，红色那条带永远画不出来 —— 留着一个
                永远没有对应曲线的图例，比没有图例更坏。 -->
           <span class="lgd">
-            <span><i style="background:var(--green)"></i><span data-i18n="log.roleLife">生之执</span></span>
+            <span><i style="background:var(--green)"></i><span id="lgdLifeTxt" data-i18n="log.roleLife">生之执</span></span>
             <span id="lgdDeath"><i style="background:var(--red)"></i><span data-i18n="log.roleDeath">死之执</span></span>
           </span>
         </span>
@@ -653,7 +653,8 @@ textarea{resize:vertical}
         <option value="duel" data-i18n="game.modeDuel">双人对弈 — 生之执与死之执各翻一格</option>
         <option value="solo" data-i18n="game.modeSolo">纯生执单人 — 只有生之执在走</option>
       </select>
-      <div class="desc" data-i18n="game.modeNote" style="margin-top:8px;margin-bottom:0">单人模式没有死之执：一回合只翻一格。终局判定也跟着变 —— 「死之执无处可翻」不再是终局（那意味着棋盘全死，而那时生之执处处可翻），「推不动」只问生之执的落点；占比连续跌破死之执那条线的含义是「棋盘死绝」，不是「对手赢了」。</div>
+      <!-- 措辞随模式变（选到什么就读什么），所以由 `syncModeUi()` 写 -->
+      <div class="desc" id="modeNote" style="margin-top:8px;margin-bottom:0">双人对弈：生之执与死之执各翻一格，再演化一代。</div>
     </div>
 
     <div class="field">
@@ -679,7 +680,8 @@ textarea{resize:vertical}
       <div class="warnline" id="turnLimitWarn" data-i18n="game.turnLimitWarn">回合上限必须是 1 以上的整数</div>
 
       <div class="slider-row" style="margin-top:11px">
-        <span class="tinylbl" style="margin:0;color:var(--green)" data-i18n="game.lifeWin">生之执获胜线</span>
+        <!-- 措辞随模式变（单人局里行动方叫「玩家」），所以由 `syncModeUi()` 写 -->
+        <span class="tinylbl" id="lifeWinLbl" style="margin:0;color:var(--green)">生之执获胜线</span>
         <!-- ⚠ 这个 value 必须与 `presets.ts` 的 RULES_8.lifeWinRatio 一致。
              两者对不上时不会报错：新建一局用的是 JS 里的默认值，而面板上
              显示的是这里的值 —— 用户会看到「界面写 33、实际按 30 判」，

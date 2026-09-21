@@ -287,7 +287,9 @@ export const DEFAULT_DUEL: DuelSettings = {
   cols: DEFAULT_COLS,
   rows: DEFAULT_ROWS,
   // 出厂是双人对弈：那是跨模型对照的载体，也是这个项目的主线
-  mode: "duel",
+  // ★ 单人局是默认模式（用户 2026-09-21 定）。它是「改默认」不是「强制」——
+  // 存档与本地设置里存过 mode 的一律照旧，只有新用户与「恢复默认」走这里
+  mode: "solo",
   topology: presetFor(DEFAULT_COLS, DEFAULT_ROWS).defaultTopology,
   turnLimit: defaultTurnLimit(DEFAULT_COLS, DEFAULT_ROWS),
   // 胜负线的出厂值**取自预设**，不另写一份字面量：抄一份的话，改预设里的

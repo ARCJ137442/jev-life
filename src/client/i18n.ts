@@ -61,7 +61,7 @@ const DICT: Record<Lang, Record<string, string>> = {
       "每一回合双方各翻一格，Jev 返回带校准概率的决策 —— 它不做文本生成，只回答「这一格翻不翻」",
     // 单人局的副标题提示：照双人那句写就是在说一件不会发生的事（没有第二个行动方）
     "app.subtitleTitleSolo":
-      "单人局：每回合只有生之执翻一格，Jev 返回带校准概率的决策 —— 它不做文本生成，只回答「这一格翻不翻」",
+      "单人局：每回合只有玩家翻一格，Jev 返回带校准概率的决策 —— 它不做文本生成，只回答「这一格翻不翻」",
     "nav.game": "游戏",
     "nav.gameTitle":
       "棋盘尺寸、拓扑、终局规则、开局 —— 生命棋里规则不自明，这里改任何东西都会进入 Jev 的输入，概率分布应当随之变化",
@@ -69,7 +69,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "nav.strategyTitle": "上下文（影响 Jev 看到什么）与规则（影响动作如何落实）",
     "nav.apiTitle": "用哪个后端、怎么调用",
     "nav.log": "日志",
-    "nav.logTitle": "每个回合的完整往返记录（双方各自的请求与回包）",
+    "nav.logTitle": "每个回合的完整往返记录（每一次调用的请求与回包）",
     "nav.archive": "存档",
     "nav.archiveTitle": "导入 / 导出存档：对局、策略、API 设置、调用日志",
     "nav.githubTitle": "在 GitHub 上查看源码 · 欢迎 star 与 issue",
@@ -79,28 +79,33 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- 棋盘下方控制条 ---------- */
     "ctrl.takeover": "▶ 开始对弈",
+    // 单人局里「对弈」这个词不成立 —— 对弈要有对手，而那里只有你一个行动方。
+    // 两个状态**一起**分模式：它们是同一个按钮轮流出场的两副面孔，
+    // 只分一个会让按钮在「开始对弈」与「继续游戏」之间来回跳
+    "ctrl.takeoverSolo": "▶ 开始游戏",
     "ctrl.resume": "▶ 继续对弈",
+    "ctrl.resumeSolo": "▶ 继续游戏",
     "ctrl.started": "● 已开始",
     "ctrl.pause": "⏸ 暂停",
     "ctrl.takeoverTitle": "让双方 AI 自动对弈 / 暂停（空格）",
-    "ctrl.takeoverTitleSolo": "让生之执自动走 / 暂停（空格）",
+    "ctrl.takeoverTitleSolo": "让玩家自动走 / 暂停（空格）",
     "ctrl.resumeTitle": "接着这一局往下走（空格）",
-    "ctrl.startedTitle": "对弈进行中 —— 点一下暂停（空格）",
+    "ctrl.startedTitle": "进行中 —— 点一下暂停（空格）",
     "ctrl.step": "单步",
     "ctrl.stepTitle": "只走一个回合（双方同时落子，再演化一代）",
-    "ctrl.stepTitleSolo": "只走一个回合（生之执翻一格，再演化一代）",
+    "ctrl.stepTitleSolo": "只走一个回合（玩家翻一格，再演化一代）",
     "ctrl.new": "↺ 重开",
     "ctrl.newTitle": "重开一局，保留全部设置",
     "ctrl.clearBoard": "清空棋盘",
-    "ctrl.clearBoardTitle": "把棋盘擦成空的，重新画（只在开始对弈之前可用）",
-    "ctrl.drawHint": "开始对弈之前，点格子即可摆放开局（只有缩放反馈，没有粒子与选框 —— 那时还没有行动方）。开始之后棋盘锁定。",
+    "ctrl.clearBoardTitle": "把棋盘擦成空的，重新画（只在开始之前可用）",
+    "ctrl.drawHint": "开始之前，点格子即可摆放开局（只有缩放反馈，没有粒子与选框 —— 那时还没有行动方）。开始之后棋盘锁定。",
     "ctrl.result": "终局",
     "ctrl.resultTitle": "重新打开终局结果",
     "ctrl.hint": "暂停",
 
     /* ---------- 步进滑块 ---------- */
     "pace.label": "步进间隔",
-    "pace.title": "自动对弈的步进间隔。0 = 不等，上游多快就多快（测极限用）",
+    "pace.title": "自动进行的步进间隔。0 = 不等，上游多快就多快（测极限用）",
     "pace.instant": "最快",
 
     /* ---------- 记分板（标签固定为 ASCII，不翻译）---------- */
@@ -146,9 +151,14 @@ const DICT: Record<Lang, Record<string, string>> = {
       "⚠ 环绕拓扑 + 极小尺寸（2~3）：能算，但 rows = 2 时 r−1 与 r+1 是同一行，同一个格子会被重复计数 —— 结果是确定的，只是没有对应的几何直觉。",
     "game.mode": "对局模式",
     "game.modeDuel": "双人对弈 — 生之执与死之执各翻一格",
-    "game.modeSolo": "纯生执单人 — 只有生之执在走",
+    "game.modeSolo": "单人 — 只有玩家在走",
+    // ★ 这段说明**跟着选中的模式走**。原先是一句写死的「单人模式没有死之执……」，
+    // 于是双人局下它也在讲死之执、单人局下它拿死之执去解释一个没有死之执的局面。
+    // 两份都**不许提对方**（`mode.test.ts` 会查「双人里不出现单人、单人里不出现双方」）
     "game.modeNote":
-      "单人模式没有死之执：一回合只翻一格。终局判定也跟着变 —— 「死之执无处可翻」不再是终局（那意味着棋盘全死，而那时生之执处处可翻），「推不动」只问生之执的落点；占比连续跌破死之执那条线的含义是「棋盘死绝」，不是「对手赢了」。",
+      "双人对弈：生之执与死之执各翻一格，再演化一代。占比连续越界、清空 / 占满棋盘、整盘推不动都会判终局。",
+    "game.modeNoteSolo":
+      "单人：一回合你翻一格，再演化一代。没有对手，所以终局只看局面本身 —— 占比连续越界判胜负、整盘推不动按占比判、到回合上限判和局。",
     "game.topology": "边界拓扑",
     "game.topoBounded": "有界 — 棋盘之外算死格，边界是墙",
     "game.topoTorus": "环绕 — 上下边相连、左右边相连，没有墙",
@@ -164,11 +174,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     // ★ 单人局里那两条线**仍然有意义**，但含义换了：没有对手，跌破死之执那条线
     // 说的是「棋盘死绝」。措辞跟着换，否则界面会把一个不在场的人写进规则里
     "game.rulesNoteSolo":
-      "胜负线：生之执 ≥ {life}% 连续 {ls} 回合获胜；占比 ≤ {death}% 连续 {ds} 回合则**棋盘死绝**（单人局没有对手，那不是「对手赢了」）。清空 / 占满棋盘、整盘推不动都会立即终局。",
+      "胜负线：玩家 ≥ {life}% 连续 {ls} 回合获胜；占比 ≤ {death}% 连续 {ds} 回合则**棋盘死绝**（单人局没有对手，那不是「对手赢了」）。清空 / 占满棋盘、整盘推不动都会立即终局。",
     "game.rulesInvertedSolo":
-      "⚠ 棋盘死绝线不低于生之执获胜线：判终局时生之执那条先判，倒挂会让棋盘死绝这条实际上永远轮不到。",
+      "⚠ 棋盘死绝线不低于玩家获胜线：判终局时玩家那条先判，倒挂会让棋盘死绝这条实际上永远轮不到。",
     "game.turnLimitWarn": "回合上限必须是 1 以上的整数",
     "game.lifeWin": "生之执获胜线",
+    "game.lifeWinSolo": "玩家获胜线",
     "game.deathWin": "死之执获胜线",
     "game.deathWinSolo": "棋盘死绝线",
     "game.streak": "连续",
@@ -208,7 +219,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     // ★ 单人模式：整个玩家栏都是死配置（`syncModeUi()` 会把它停用）。
     // 这句话是停用的**理由** —— 不写出来，用户只会以为那一栏坏了
     "strategy.roleHintSolo":
-      "单人模式没有死之执：死之执那一栏的设置**一项都不会被用到**（后端、模型、上下文、策略都不下场），所以整栏已停用。切回「双人对弈」即可编辑，设置也还在。",
+      "单人局里只有一个行动方，所以**没有第二栏** —— 它描述的是一栏没有消费者的设置。设置本身仍在存档里，切回「双人对弈」就能接着编辑。",
 
     /* ---------- ★ 规则说明书模板（策略 › 上下文）---------- */
     "tpl.section": "规则说明书（正文）",
@@ -232,18 +243,21 @@ const DICT: Record<Lang, Record<string, string>> = {
        守着「默认模板里出现过的占位符都必须有 whyKey」 */
     "tpl.why.role": "模型据此知道自己是哪一方",
     "tpl.why.codename": "模型据此知道自己扮演的是 Life 还是 Death",
-    "tpl.why.direction": "方向词（尽可能多 / 尽可能少）—— 死之执那一边必须反向，写反了测到的是模型的直觉而不是它对规则的理解",
+    // 这几条解释的是**占位符的作用**，不是「当前这一局谁在场上」——
+    // 所以措辞取模式无关的说法。写「生之执 / 死之执」会在单人局里指错人，
+    // 而这条提示本来就该在两套规则下读得通
+    "tpl.why.direction": "方向词（尽可能多 / 尽可能少）—— 反向的那一边必须显式写出来，写反了测到的是模型的直觉，不是它对规则的理解",
     "tpl.why.flipAbility": "模型据此知道自己这一手能翻的是哪种格子",
-    "tpl.why.attitude": "「让细胞活着对你有（不）利」—— 死之执缺了这句就只剩一个角色名，模型会按「让细胞活着」的直觉答",
+    "tpl.why.attitude": "「让细胞活着对你有（不）利」—— 少了这句就只剩一个角色名，模型会按「让细胞活着」的直觉答",
     "tpl.why.objectiveMine": "结算方向：累计净增长对你是越大越好还是越小越好",
     "tpl.why.mode": "这一局是双人对弈还是单人",
     "tpl.why.perTurnFlips": "一回合有几个人落子 —— 单人局里写「双方」，模型会去等一个不存在的对手",
     "tpl.why.turn": "当前是第几回合",
     "tpl.why.turnLimit": "这局有没有回合上限、还剩多久（不设上限时它会换成整句话）",
-    "tpl.why.lifeWinRatio": "生之执获胜的占比阈值",
-    "tpl.why.deathWinRatio": "死之执获胜（单人局里是棋盘死绝）的占比阈值",
-    "tpl.why.lifeStreak": "生之执要连续越界几回合才算赢（防抖）",
-    "tpl.why.deathStreak": "死之执要连续越界几回合才算赢（防抖）",
+    "tpl.why.lifeWinRatio": "获胜线的占比阈值（越过它并连续保持即获胜）",
+    "tpl.why.deathWinRatio": "落败线的占比阈值（单人局里它就是「棋盘死绝」那条线）",
+    "tpl.why.lifeStreak": "获胜线要连续越界几回合才算数（防抖）",
+    "tpl.why.deathStreak": "落败线要连续越界几回合才算数（防抖）",
     "tpl.why.topology": "边界是有界还是环绕",
     "tpl.why.topologyDetail": "界外算死、环绕怎么算邻居 —— 邻居数算错，模型对任何一手后果的预测都是错的",
     "tpl.why.cols": "棋盘有几列",
@@ -263,7 +277,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "strategy.memoryLabel": "记忆轮数 → recent_history",
     "strategy.memoryDesc": "把最近 n 回合的「局面 + 双方落点 + 净增长」一并发给 Jev。0 = 不加入。",
     // 单人局的记忆里**没有**死之执那一手（`TurnRecord.deathFlip` 整个不出现）
-    "strategy.memoryDescSolo": "把最近 n 回合的「局面 + 你的落点 + 净增长」一并发给 Jev。单人局没有死之执那一手，0 = 不加入。",
+    "strategy.memoryDescSolo": "把最近 n 回合的「局面 + 你的落点 + 净增长」一并发给 Jev。单人局没有对手那一手，0 = 不加入。",
     "strategy.memoryNote": "上限受模型上下文窗口约束，超出预算时会截断。",
     "strategy.max": "最大",
     "strategy.maxTitle": "在上下文预算内尽量塞满",
@@ -387,7 +401,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "stats.latency": "延迟",
     "status.ready": "就绪",
     "status.calling": "正在请求双方决策…",
-    "status.callingSolo": "正在请求生之执的决策…",
+    "status.callingSolo": "正在请求玩家的决策…",
     "status.retrying": "第 {n} 次重试（{s}s 后）",
     "status.online": "已连接",
     "status.paused": "已暂停",
@@ -417,13 +431,17 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- 终局原因 ---------- */
     "term.lifeWinRatio": "存活占比连续 {n} 回合 ≥ {ratio} —— 生之执获胜",
+    // 单人局里同一个终局原因，赢家叫「玩家」
+    "term.lifeWinRatioSolo": "存活占比连续 {n} 回合 ≥ {ratio} —— 你获胜",
+    "term.noLegalCellSolo":
+      "你把棋盘占满了（一个死格都不剩）—— 你获胜。注意这**不是**「没棋可走就输」，而是你把自己的目标推到了极限",
     "term.deathWinRatio": "存活占比连续 {n} 回合 ≤ {ratio} —— 死之执获胜",
     "term.noLegalCellLife": "生之执把棋盘占满了（对方一格都翻不动）—— 生之执获胜",
     "term.noLegalCellDeath": "死之执把棋盘清空了（对方一格都翻不动）—— 死之执获胜",
     "term.repeatBlocked": "整盘推不动：此后任何落子组合都会走到见过的局面",
     "term.turnLimit": "到达回合上限 {n}，仍未分出胜负",
     "term.soloDiedOut":
-      "活细胞占比连续 {n} 回合 ≤ {ratio} —— 棋盘死绝（单人局没有对手，「死之执获胜」不适用）",
+      "活细胞占比连续 {n} 回合 ≤ {ratio} —— 棋盘死绝（单人局没有对手，也就没有「谁获胜」这回事）",
 
     /* ---------- 界面上自造的错误（不来自上游）---------- */
     "err.backendUnreachable":
@@ -439,7 +457,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- 日志 ---------- */
     "log.title": "调用日志",
-    "log.desc": "每个回合一条：双方各自的请求体与回包。按回合折叠，展开看完整 JSON。",
+    "log.desc": "每个回合一条：每一次调用的请求体与回包。按回合折叠，展开看完整 JSON。",
     "log.snapLabel": "这一手用的规则说明书模板",
     "log.copySnap": "复制模板",
     "log.empty": "还没有请求记录",
@@ -459,6 +477,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "log.calls": "上游 {n} 次",
     "log.roleLife": "生之执",
     "log.roleDeath": "死之执",
+    // 单人局里行动方只有这一个名字。它由 `mode.ts` 的 SOLO 表指过来，
+    // 不是靠 `roleLabel()` 里写死 —— 名字随模式走，颜色不随（见 `ROLE_META`）
+    "log.rolePlayer": "玩家",
     "log.noPayload": "（这一条是从存档恢复的，请求体没有随存档保留）",
     "log.costUnknown": "成本未知",
 
@@ -466,7 +487,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "archive.desc": "各类内容各自独立成档，可分别备份与恢复。导出的是 JSON 文件，导入时逐项校验。",
     "archive.game": "对局（棋盘与进程）",
     "archive.gameDesc": "棋盘、回合、比分、记忆、调用日志，以及尺寸 / 拓扑 / 终局规则 / 开局。",
-    "archive.strategyDesc": "双方各自的上下文（规则说明、策略提示、后果预测、记忆轮数、自动结构识别）与规则（决策策略、置信度门槛）。",
+    "archive.strategyDesc": "每个玩家各自的上下文（规则说明、策略提示、后果预测、记忆轮数、自动结构识别）与规则（决策策略、置信度门槛）。",
     "archive.apiDesc": "自动重试参数。",
     "archive.noKey": "不含密钥",
     "archive.noKeyDesc": "—— 密钥从不落盘，因此也无法导出。",
@@ -548,7 +569,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "field.gameSettings": "对局设置",
     "field.apiSettings": "API 设置",
     "field.session": "对局",
-    "field.roles": "双方玩家设置",
+    "field.roles": "玩家设置",
     "kind.game": "对局",
     "kind.strategy": "策略",
     "kind.api": "API",
@@ -593,7 +614,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "app.subtitleTitle":
       "Each turn both sides flip one cell and Jev returns calibrated probabilities — no text generation, just whether to flip this cell",
     "app.subtitleTitleSolo":
-      "Solo game: each turn only Life flips a cell, and Jev returns calibrated probabilities — no text generation, just whether to flip this cell",
+      "Solo game: each turn only the player flips a cell, and Jev returns calibrated probabilities — no text generation, just whether to flip this cell",
     "nav.game": "Game",
     "nav.gameTitle":
       "Board size, topology, end rules, opening — in Life Chess the rules are not self-evident, so anything changed here enters Jev's input and the probability distribution should change with it",
@@ -601,7 +622,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "nav.strategyTitle": "Context (what Jev sees) and rules (how an answer becomes a move)",
     "nav.apiTitle": "Which backend, and how to call it",
     "nav.log": "Log",
-    "nav.logTitle": "The full round trip of every turn, for both sides",
+    "nav.logTitle": "The full round trip of every turn — every request and response",
     "nav.archive": "Archive",
     "nav.archiveTitle": "Import / export: game, strategy, API settings, call log",
     "nav.githubTitle": "View the source on GitHub · stars and issues welcome",
@@ -611,28 +632,32 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- Controls under the board ---------- */
     "ctrl.takeover": "▶ Start the duel",
+    // A “duel” needs an opponent; in solo there is only you. Both states are
+    // split together — they are the two faces of one button
+    "ctrl.takeoverSolo": "▶ Start playing",
     "ctrl.resume": "▶ Resume the duel",
+    "ctrl.resumeSolo": "▶ Resume",
     "ctrl.started": "● In progress",
     "ctrl.pause": "⏸ Pause",
     "ctrl.takeoverTitle": "Let both AIs play automatically / pause (space)",
-    "ctrl.takeoverTitleSolo": "Let Life play automatically / pause (space)",
+    "ctrl.takeoverTitleSolo": "Let the player move automatically / pause (space)",
     "ctrl.resumeTitle": "Carry on with this game (space)",
-    "ctrl.startedTitle": "The duel is running — click to pause (space)",
+    "ctrl.startedTitle": "Running — click to pause (space)",
     "ctrl.step": "Step",
     "ctrl.stepTitle": "Play a single turn (both sides flip, then one evolution)",
-    "ctrl.stepTitleSolo": "Play a single turn (Life flips one cell, then one evolution)",
+    "ctrl.stepTitleSolo": "Play a single turn (the player flips one cell, then one evolution)",
     "ctrl.new": "↺ Restart",
     "ctrl.newTitle": "Start a fresh game, keeping every setting",
     "ctrl.clearBoard": "Clear board",
-    "ctrl.clearBoardTitle": "Wipe the board and start drawing again (only before the duel starts)",
-    "ctrl.drawHint": "Before the duel starts, click cells to set up the opening (scale feedback only — no particles, no ring: there is no acting side yet). Once it starts, the board is locked.",
+    "ctrl.clearBoardTitle": "Wipe the board and start drawing again (only before it starts)",
+    "ctrl.drawHint": "Before it starts, click cells to set up the opening (scale feedback only — no particles, no ring: there is no acting side yet). Once it starts, the board is locked.",
     "ctrl.result": "Result",
     "ctrl.resultTitle": "Reopen the end-of-game result",
     "ctrl.hint": "pause",
 
     /* ---------- Pace slider ---------- */
     "pace.label": "Step interval",
-    "pace.title": "How fast the two AIs play. 0 = no wait at all; whatever the upstream gives",
+    "pace.title": "How fast it plays automatically. 0 = no wait at all; whatever the upstream gives",
     "pace.instant": "Instant",
 
     /* ---------- Scoreboard (labels stay ASCII, untranslated) ---------- */
@@ -677,9 +702,13 @@ const DICT: Record<Lang, Record<string, string>> = {
       "⚠ Torus topology at a tiny size (2–3): it computes, but with rows = 2 the row r−1 and the row r+1 are the same row, so a cell's neighbours are counted more than once — the result is well defined, it just has no matching geometric intuition.",
     "game.mode": "Game mode",
     "game.modeDuel": "Duel — Life and Death each flip one cell",
-    "game.modeSolo": "Life only — nobody else moves",
+    "game.modeSolo": "Solo — only the player moves",
+    // This note follows the **selected** mode. Each version must stay silent
+    // about the other (`mode.test.ts` checks for that in both directions)
     "game.modeNote":
-      "In solo mode there is no Death: a turn flips a single cell. The end conditions change with it — “Death has nothing to flip” is no longer an ending (it means the board is entirely dead, and then Life can flip anywhere), “cannot move” only asks about Life's moves, and a ratio that stays below Death's line means “the board died out”, not “the opponent won”.",
+      "Duel: Life and Death each flip one cell, then one evolution runs. The game ends on a ratio line held across turns, an emptied or filled board, or a position that can no longer move.",
+    "game.modeNoteSolo":
+      "Solo: you flip one cell per turn, then one evolution runs. There is no opponent, so the ending is about the board itself — a ratio line held across turns, a stuck position judged by the ratio, or the turn limit as a draw.",
     "game.topology": "Boundary topology",
     "game.topoBounded": "Bounded — outside the board counts as dead; the edge is a wall",
     "game.topoTorus": "Torus — top wraps to bottom, left to right; no walls",
@@ -693,12 +722,13 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.rulesInverted":
       "⚠ Death's line is not below Life's: the Life condition is tested first, so an inverted pair means Death's line can never actually trigger.",
     "game.rulesNoteSolo":
-      "Win lines: Life wins at ≥ {life}% held for {ls} turns; a ratio ≤ {death}% held for {ds} turns means **the board died out** (there is no opponent in a solo game, so it is not “the opponent won”). Emptying or filling the board, or a position that can no longer move, ends the game immediately.",
+      "Win lines: the player wins at ≥ {life}% held for {ls} turns; a ratio ≤ {death}% held for {ds} turns means **the board died out** (there is no opponent in a solo game, so it is not “the opponent won”). Emptying or filling the board, or a position that can no longer move, ends the game immediately.",
     "game.rulesInvertedSolo":
-      "⚠ The died-out line is not below Life's win line: the Life condition is tested first, so an inverted pair means the died-out line can never actually trigger.",
+      "⚠ The died-out line is not below the player's win line: the win condition is tested first, so an inverted pair means the died-out line can never actually trigger.",
     "game.turnLimitWarn": "The turn limit must be either empty (no limit) or an integer of at least 1",
     "game.lifeWin": "Life wins at",
     "game.deathWin": "Death wins at",
+    "game.lifeWinSolo": "Your win line",
     "game.deathWinSolo": "Died out at",
     "game.streak": "for",
     "game.turns": "turns",
@@ -715,7 +745,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.openingHint": "The opening library is per size — pick the size first, then the opening. Changing it restarts the game immediately.",
     "game.customOpening": "Custom (empty board)",
     "game.customOpeningNote":
-      "Start from an empty board and draw your own. Before the duel starts a click flips a cell; once you have drawn, this entry stays marked “custom” instead of claiming the game uses some preset.",
+      "Start from an empty board and draw your own. Before it starts a click flips a cell; once you have drawn, this entry stays marked “custom” instead of claiming the game uses some preset.",
     "game.noOpeningLib": "This size is not a preset, so there is no opening library — draw your own from an empty board.",
     "game.reset": "Reset to defaults",
     "game.resetTitle": "Size, topology, end rules, opening and effects go back to factory values",
@@ -735,7 +765,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "strategy.ruleNoteDesc":
       "The **body** of the rules is rendered from the six templates above (size, topology and win lines are all in there), so this field is for supplements only. Leave it empty and the field disappears entirely.",
     "strategy.roleHintSolo":
-      "There is no Death in solo mode: nothing in Death's column is ever used (backend, model, context, strategy — it never takes part), so the whole column is disabled. Switch back to “Duel” to edit it; the settings are still there.",
+      "A solo game has only one actor, so there is **no second column** — it describes a column with no consumer. The settings stay in the archive; switch back to “Duel” to edit them.",
 
     /* ---------- ★ Rule templates (Strategy › Context) ---------- */
     "tpl.section": "Rule sheet (body)",
@@ -756,18 +786,18 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     "tpl.why.role": "how the model knows which side it is on",
     "tpl.why.codename": "how the model knows whether it plays Life or Death",
-    "tpl.why.direction": "the direction word (as large / as small as possible) — Death's copy must be reversed, or what gets measured is the model's instinct rather than its reading of the rules",
+    "tpl.why.direction": "the direction word (as large / as small as possible) — whichever side is reversed must be spelled out, or what gets measured is the model's instinct rather than its reading of the rules",
     "tpl.why.flipAbility": "which kind of cell the model may flip",
-    "tpl.why.attitude": "“keeping cells alive is (dis)advantageous to you” — without it Death is just a role name and the model answers on the “keep cells alive” instinct",
+    "tpl.why.attitude": "“keeping cells alive is (dis)advantageous to you” — without it the role is just a name and the model answers on the “keep cells alive” instinct",
     "tpl.why.objectiveMine": "which direction the score settles in for this player",
     "tpl.why.mode": "whether this is a duel or a solo game",
     "tpl.why.perTurnFlips": "how many players move each turn — saying “both sides” in a solo game makes the model wait for an opponent that is not there",
     "tpl.why.turn": "which turn it is",
     "tpl.why.turnLimit": "whether there is a turn limit and how much is left (with no limit it expands to a whole clause)",
-    "tpl.why.lifeWinRatio": "the ratio threshold at which Life wins",
-    "tpl.why.deathWinRatio": "the ratio threshold at which Death wins (the board died out, in a solo game)",
-    "tpl.why.lifeStreak": "how many turns in a row Life must stay beyond the line (debounce)",
-    "tpl.why.deathStreak": "how many turns in a row Death must stay beyond the line (debounce)",
+    "tpl.why.lifeWinRatio": "the winning line's ratio threshold (hold beyond it for the streak and you win)",
+    "tpl.why.deathWinRatio": "the losing line's ratio threshold (in a solo game this is the “board died out” line)",
+    "tpl.why.lifeStreak": "how many turns in a row the winning line must be held (debounce)",
+    "tpl.why.deathStreak": "how many turns in a row the losing line must be held (debounce)",
     "tpl.why.topology": "whether the boundary is bounded or a torus",
     "tpl.why.topologyDetail": "how neighbours are counted outside the board or across the wrap — get the neighbour count wrong and every consequence prediction is wrong",
     "tpl.why.cols": "how many columns the board has",
@@ -786,7 +816,7 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Adds the live-cell change of “this flip plus one evolution” to the question text as background. Background only: the question always asks about long-term value, or the answer would be printed on the question.",
     "strategy.memoryLabel": "Memory turns → recent_history",
     "strategy.memoryDesc": "Sends the last n turns (board, both flips, net growth) along with the request. 0 = leave it out.",
-    "strategy.memoryDescSolo": "Sends the last n turns (board, your flip, net growth) along with the request. A solo game has no Death flip. 0 = leave it out.",
+    "strategy.memoryDescSolo": "Sends the last n turns (board, your flip, net growth) along with the request. A solo game has no opponent's flip. 0 = leave it out.",
     "strategy.memoryNote": "Bounded by the model's context window; truncated when over budget.",
     "strategy.max": "Max",
     "strategy.maxTitle": "Fill as much as the context budget allows",
@@ -910,7 +940,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "stats.latency": "Latency",
     "status.ready": "Ready",
     "status.calling": "Waiting for both decisions…",
-    "status.callingSolo": "Waiting for Life's decision…",
+    "status.callingSolo": "Waiting for the player's decision…",
     "status.retrying": "Retry {n} (in {s}s)",
     "status.online": "Connected",
     "status.paused": "Paused",
@@ -940,13 +970,16 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- Termination reasons ---------- */
     "term.lifeWinRatio": "Live ratio held ≥ {ratio} for {n} turns — Life wins",
+    "term.lifeWinRatioSolo": "Live ratio held ≥ {ratio} for {n} turns — you win",
+    "term.noLegalCellSolo":
+      "You filled the board — not a single dead cell left — and you win. Note this is **not** “no move left, so you lose”; it is your own objective pushed to its limit",
     "term.deathWinRatio": "Live ratio held ≤ {ratio} for {n} turns — Death wins",
     "term.noLegalCellLife": "Life filled the board (Death has no legal cell) — Life wins",
     "term.noLegalCellDeath": "Death emptied the board (Life has no legal cell) — Death wins",
     "term.repeatBlocked": "The position can no longer move: every combination leads back to a seen position",
     "term.turnLimit": "Reached the {n}-turn limit without a winner",
     "term.soloDiedOut":
-      "The live-cell ratio stayed ≤ {ratio} for {n} turns — the board died out (there is no opponent in a solo game, so “Death wins” does not apply)",
+      "The live-cell ratio stayed ≤ {ratio} for {n} turns — the board died out (there is no opponent in a solo game, so there is no “winner” either)",
 
     /* ---------- Errors invented by the UI (not from upstream) ---------- */
     "err.backendUnreachable":
@@ -962,7 +995,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- Log ---------- */
     "log.title": "Call log",
-    "log.desc": "One entry per turn: both sides' request and response. Collapsed by turn; expand for the full JSON.",
+    "log.desc": "One entry per turn: every request and response. Collapsed by turn; expand for the full JSON.",
     "log.snapLabel": "Rule templates used for this move",
     "log.copySnap": "Copy templates",
     "log.empty": "No calls recorded yet",
@@ -982,6 +1015,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "log.calls": "{n} upstream",
     "log.roleLife": "Life",
     "log.roleDeath": "Death",
+    "log.rolePlayer": "Player",
     "log.noPayload": "(restored from an archive; request bodies were not kept)",
     "log.costUnknown": "cost unknown",
 
@@ -989,7 +1023,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "archive.desc": "Each kind is a separate archive you can back up and restore on its own. Exports are JSON files; imports are validated field by field.",
     "archive.game": "Game (board and progress)",
     "archive.gameDesc": "Board, turn, scores, memory, call log, plus size / topology / end rules / opening.",
-    "archive.strategyDesc": "Both players' context (rule notes, strategy hint, outcome prediction, memory turns, pattern detection) and rules (decision strategy, confidence threshold).",
+    "archive.strategyDesc": "Each player's context (rule notes, strategy hint, outcome prediction, memory turns, pattern detection) and rules (decision strategy, confidence threshold).",
     "archive.apiDesc": "Automatic retry parameters.",
     "archive.noKey": "No keys",
     "archive.noKeyDesc": " — keys are never written to disk, so they cannot be exported either.",
@@ -1071,7 +1105,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "field.gameSettings": "game settings",
     "field.apiSettings": "API settings",
     "field.session": "game",
-    "field.roles": "both players' settings",
+    "field.roles": "player settings",
     "kind.game": "game",
     "kind.strategy": "strategy",
     "kind.api": "API",

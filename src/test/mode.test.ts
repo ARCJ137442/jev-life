@@ -24,6 +24,11 @@ import { TEMPLATE_KEYS } from "../core/template.js";
 /** 一份 ModeUi 里所有「词条 key」字段。加字段时这里跟着加，测试才会继续管住它 */
 const KEY_FIELDS = [
   "deathWinLabel",
+  "lifeWinLabel",
+  "lifeLabel",
+  "modeNote",
+  "takeover",
+  "resume",
   "rulesNote",
   "rulesInverted",
   "calling",
@@ -72,12 +77,12 @@ test("★ 会随模式改说法的项，两种模式给的必须是不同的词�
   const solo = modeUi("solo");
   // 这几项在单人局里说的**不是**同一件事（「双方各翻一格」/「死之执获胜」），
   // 漏分时它们会相等，而界面上看不出任何异常
-  for (const f of ["deathWinLabel", "rulesNote", "rulesInverted", "calling", "stepTitle", "takeoverTitle", "subtitleTitle", "memoryDesc", "roleHint"] as const) {
+  for (const f of ["deathWinLabel", "lifeWinLabel", "lifeLabel", "modeNote", "takeover", "resume", "rulesNote", "rulesInverted", "calling", "stepTitle", "takeoverTitle", "subtitleTitle", "memoryDesc", "roleHint"] as const) {
     assert.notEqual(duel[f], solo[f], `${f} 在两种模式下用了同一条词条 —— 至少有一边是错的`);
   }
 });
 
-test("★ 单人局必须**停用**死之执那一栏，并收起它的图例", () => {
+test("★ 单人局必须**收起**死之执那一栏，并收起它的图例", () => {
   const duel = modeUi("duel");
   const solo = modeUi("solo");
 
@@ -97,6 +102,28 @@ test("★ 单人局的文案里不出现「双方」—— 场上只有一个行
   const solo = modeUi("solo");
   for (const key of keysOf(solo)) {
     assert.doesNotMatch(t(key), /双方/, `单人局的 ${key} 里还写着「双方」：${t(key)}`);
+  }
+});
+
+test("★ 单人局里行动方叫「玩家」—— 名字随模式走，颜色不随", () => {
+  const zh = dictFor("zh");
+  assert.equal(zh[modeUi("solo").lifeLabel], "玩家");
+  assert.equal(zh[modeUi("duel").lifeLabel], "生之执");
+  // 配色不动是刻意的（用户定：单人局仍沿用前二者的配色），所以这里只钉名字 ——
+  // `ROLE_META` 里的颜色与这条断言无关，谁也别顺手把颜色也「统一」掉
+});
+
+test("★ 单人局的**每一条**文案里都不出现「生之执」「死之执」", () => {
+  // 这条锁的是用户 2026-09-21 那条要求：单人局里统一成「玩家」。
+  // 逐条查而不是抽查：模式表里的任何一个 key 走漏一个，界面上就会冒出
+  // 一个单人局里不存在的角色名 —— 而它渲染得完全正常，看不出异常
+  const zh = dictFor("zh");
+  for (const key of keysOf(modeUi("solo"))) {
+    assert.doesNotMatch(
+      zh[key],
+      /生之执|死之执/,
+      `单人局的 ${key} 里还留着角色名：${zh[key]}`,
+    );
   }
 });
 

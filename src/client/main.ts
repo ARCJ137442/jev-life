@@ -341,7 +341,20 @@ function setLed(
 
 /* ═══════════ 从设置现算的小工具 ═══════════ */
 
-const roleLabel = (role: Role): string => t(ROLE_META[role].labelKey);
+/**
+ * 行动方的**名字**。单人局里叫「玩家」，双人局里叫「生之执 / 死之执」。
+ *
+ * ★ 名字随模式走，**颜色照旧**（`ROLE_META` 只管配色）—— 用户定的是
+ * 「单人局仍沿用前二者的配色，只是称呼统一成玩家」。这两件事必须分开：
+ * 把 labelKey 也塞进 `ROLE_META` 就只能得到一种称呼，而它是模式无关的常量。
+ *
+ * 它一个入口管着比看上去多的位置：决策面板署名、日志行、终局文案、
+ * 置信度图图例、后端标识、双侧同步提示。
+ */
+const roleLabel = (role: Role): string => {
+  const m = modeUi(store.duel.mode);
+  return m.solo && role === "life" ? t(m.lifeLabel) : t(ROLE_META[role].labelKey);
+};
 
 const other = (role: Role): Role => (role === "life" ? "death" : "life");
 
@@ -1237,9 +1250,14 @@ function pushLog(row: TurnLog): void {
 /* ═══════════ 终局 ═══════════ */
 
 function reasonText(v: Termination, rules: GameRules): string {
+  // 单人局里赢家叫「玩家」—— 同一个终局原因在两套规则下说的是两件事，
+  // 所以措辞跟着模式走（与 `modeUi` 里那几项同一条理由）
+  const solo = store.duel.mode === "solo";
   switch (v.reason) {
     case "lifeWinRatio":
-      return t("term.lifeWinRatio", { n: rules.lifeStreak, ratio: pct(rules.lifeWinRatio) });
+      return solo
+        ? t("term.lifeWinRatioSolo", { n: rules.lifeStreak, ratio: pct(rules.lifeWinRatio) })
+        : t("term.lifeWinRatio", { n: rules.lifeStreak, ratio: pct(rules.lifeWinRatio) });
     case "deathWinRatio":
       return t("term.deathWinRatio", { n: rules.deathStreak, ratio: pct(rules.deathWinRatio) });
     // ★ 单人专有：同一个占比，在单人局里的含义是「局面自己死绝了」而不是
@@ -1247,6 +1265,9 @@ function reasonText(v: Termination, rules: GameRules): string {
     case "soloDiedOut":
       return t("term.soloDiedOut", { n: rules.deathStreak, ratio: pct(rules.deathWinRatio) });
     case "noLegalCell":
+      // 单人局里这一条只可能是「棋盘被占满」（另一侧是 `soloDiedOut`），
+      // 而它说的那个赢家是**你**
+      if (solo) return t("term.noLegalCellSolo");
       return v.winner === "life" ? t("term.noLegalCellLife") : t("term.noLegalCellDeath");
     case "repeatBlocked":
       return t("term.repeatBlocked");
@@ -1330,9 +1351,11 @@ function syncRunButton(): void {
     b.classList.add("running");
   } else {
     const started = state.turn > 0;
-    b.textContent = t(started ? "ctrl.resume" : "ctrl.takeover");
-    // 单人局的提示不能说「双方 AI」—— 那里只有一个 AI（见 mode.ts 那张表）
-    b.title = started ? t("ctrl.resumeTitle") : t(modeUi(store.duel.mode).takeoverTitle);
+    // 正文与 tooltip 都取自模式表：单人局里「对弈」这个词不成立（对弈要有对手）。
+    // ⚠ 两个状态必须**一起**分模式 —— 它们是同一个按钮轮流出场的两副面孔
+    const m = modeUi(store.duel.mode);
+    b.textContent = t(started ? m.resume : m.takeover);
+    b.title = started ? t("ctrl.resumeTitle") : t(m.takeoverTitle);
     b.classList.remove("running");
     b.classList.add("primary");
   }
@@ -1374,9 +1397,14 @@ function drawCell(cell: Cell): void {
   renderer.toggle(state.board, cell);
   markCustomOpening();
 
+  // ★ 开局**之前**的手绘是「布置」，不是对局 —— 所以这两格不累积，
+  // 只跟着当前活细胞数走（两个数一起动，读起来就是「还没开始记」）。
+  // 原来这里是 Math.max / Math.min，于是「你画错了又擦掉的那一版」
+  // 会留在 A.MIN 里，那是个与对局无关的数。
+  // 真正的记录从 `start()` 那一刻起算，见那里。
   const n = aliveCount(state.board);
-  state.aliveMax = Math.max(state.aliveMax, n);
-  state.aliveMin = Math.min(state.aliveMin, n);
+  state.aliveMax = n;
+  state.aliveMin = n;
 
   updateStats();
   persist();
@@ -1398,6 +1426,19 @@ function clearBoard(): void {
 
 function start(): void {
   if (state.running || state.finished) return;
+  // ★ A.MAX / A.MIN 从**开局这一刻**起算（用户 2026-09-21 定）。
+  //
+  // 放在这里而不是 `newGame()`：新局之后还可能手绘开局，而那段来回擦改
+  // 是布置不是对局。`newGame()` 那一次只负责让读数有个可显示的值。
+  //
+  // ⚠ 判据是 `!state.started`，不是无条件执行 —— `start()` 也是**恢复**
+  // 那一条路径（`toggleRun` 暂停后回到这里）。无条件重置会把已经打完的
+  // 那半局的极值抹掉，而症状是「暂停一下再继续，A.MAX 变小了」。
+  if (!state.started) {
+    const alive = aliveCount(state.board);
+    state.aliveMax = alive;
+    state.aliveMin = alive;
+  }
   state.started = true;
   state.running = true;
   syncRunButton();
@@ -1973,21 +2014,35 @@ function syncModeUi(): void {
   // 两个抽屉各有一组 roletab（策略 / API），一次全处理
   for (const b of document.querySelectorAll<HTMLButtonElement>(".roletab")) {
     const role = ROLE_OF_KEY[b.dataset.role ?? ""];
-    const off = !m.deathColumnEnabled && role === "death";
-    b.disabled = off;
-    // 停用的按钮上的 title 是**唯一**能说明「为什么按不动」的地方
-    b.title = off ? t(m.roleHint) : "";
+    const gone = !m.deathColumnEnabled && role === "death";
+    // ★ 单人局里死之执那一栏**整个收起来**（用户 2026-09-21 定）。
+    // 那里只有一个行动方、且生死一体，留一个点不动的「死之执」标签是在
+    // 指一个不存在的人。切回双人对弈时同一段代码把它放回来，设置照旧
+    b.style.display = gone ? "none" : "";
+    b.disabled = false;
+    b.title = "";
+    // 行动方的**名字**随模式变：单人局叫「玩家」。写在这里而不是 HTML 的
+    // `data-i18n` 里，是因为同一个按钮在两种模式下读法不同 —— 而
+    // `relanguage()` 先跑 `applyDom()` 再跑 `syncGameUi()`，所以这里的
+    // 赋值在语言切换后依然生效
+    if (!gone) b.textContent = t(role === "life" ? m.lifeLabel : "log.roleDeath");
   }
   $("roleHint").textContent = t(m.roleHint);
   $("apiRoleNote").textContent = t(m.roleHint);
+  // 模式下拉下面那段说明：选到什么就读什么（原先写死讲单人）
+  $("modeNote").textContent = t(m.modeNote);
 
   // ① 置信度图的图例：单人时死之执那一项整个不出现。
   // 那张图上永远不会有红色的带（没有死之执的日志就取不到分布），
   // 留一个没有曲线的图例比没有图例更坏
   $("lgdDeath").style.display = m.deathLegendVisible ? "" : "none";
+  $("lgdLifeTxt").textContent = t(m.lifeLabel);
 
-  // ② 死之执那条线：单人局里它是「棋盘死绝」，不是「对手赢了」
+  // ② 两条胜负线的标签。死之执那条在单人局说的是「棋盘死绝」（局面，不是
+  //    某个人）；生之执那条是**同一个行动方换了称呼**（玩家）—— 方向相反，
+  //    所以是两项而不是一项
   $("deathWinLbl").textContent = t(m.deathWinLabel);
+  $("lifeWinLbl").textContent = t(m.lifeWinLabel);
 
   // ③ 措辞里带「双方」的那几处（单步按钮的提示、副标题、记忆说明）
   $<HTMLButtonElement>("bStep").title = t(m.stepTitle);
@@ -3194,7 +3249,8 @@ function boot(): void {
     "board", "chart", "chartBox", "momentum", "momentumBox", "heat", "heatBox",
     "led", "status", "cost", "avgCost", "lat", "backend",
     "sAlive", "sRatio", "sTurn", "sMax", "sMin", "decision", "dTurn",
-    "lgdDeath", "subTitle", "memDesc", "deathWinLbl", "apiRoleNote", "tplList",
+    "lgdDeath", "lgdLifeTxt", "subTitle", "memDesc", "deathWinLbl", "lifeWinLbl",
+    "apiRoleNote", "tplList", "modeNote",
     "bToggle", "bStep", "bNew", "bClearBoard", "drawHint", "bResult", "pace", "paceVal",
     "bLang", "langLbl", "bGame", "bStrategy", "bApi", "bLog", "bArchive",
     "scrim", "dGame", "dStrategy", "dApi", "dLog", "dArchive", "toast", "fileInput",

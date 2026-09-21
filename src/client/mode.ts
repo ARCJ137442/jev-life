@@ -36,12 +36,47 @@ import type { Mode } from "../core/types.js";
  */
 export interface ModeUi {
   readonly solo: boolean;
-  /** 死之执那一栏（策略 / API 两个抽屉的 roletab）是否可用 */
+  /**
+   * 死之执那一栏（策略 / API 两个抽屉的 roletab）**是否出现在界面上**。
+   *
+   * ⚠ 单人局里是「整个收起来」，不是「显示但置灰」。原先的写法是停用，
+   * 理由是「藏起来会让人以为这个角色被删了，而那几项设置其实还在存档里」。
+   * 用户 2026-09-21 改掉了这个判断：单人局里行动方**生死一体**、只有一个，
+   * 留一个点不动的「死之执」标签是在**指一个不存在的人** —— 而那个理由
+   * 成立的前提（「死之执还在场上」）已经不成立了。设置本身照旧留在存档里。
+   */
   readonly deathColumnEnabled: boolean;
   /** 置信度图图例里「死之执」那一项是否显示 */
   readonly deathLegendVisible: boolean;
   /** 死之执那条胜负线的标签。单人局里它说的是「棋盘死绝」 */
   readonly deathWinLabel: string;
+  /**
+   * 生之执那条胜负线的标签。单人局里行动方叫**玩家**，所以措辞跟着换。
+   *
+   * 单开一项而不是复用 `deathWinLabel` 的反面：两者的**变化方向相反** ——
+   * 死之执那条在单人局里说的是**局面**（棋盘死绝，那条线不再属于任何人），
+   * 生之执这条说的是**同一个行动方换了称呼**。混成一项迟早会有一边写错。
+   */
+  readonly lifeWinLabel: string;
+  /**
+   * **行动方的名字**：双人局是「生之执」，单人局是「玩家」。
+   *
+   * ⚠ 只换「名字」，不动人称。规则说明书里那 21 处第二人称的「你」
+   * （「你获胜」「你翻一格」）**照旧** —— 那是直接称呼，不是角色名，
+   * 而且「你」比「玩家」更贴着一对一对话的语感（用户 2026-09-21 定）。
+   *
+   * 它落到的位置比看上去多：决策面板的署名、日志行、终局文案、置信度图
+   * 图例、后端标识、双侧同步的提示 —— 全部经由 `roleLabel()` 一个入口。
+   */
+  readonly lifeLabel: string;
+  /**
+   * 「游戏」抽屉里模式下拉下面那段说明。
+   *
+   * ★ 它**跟着选中的模式走**。原先是一句写死的「单人模式没有死之执……」——
+   * 无论选哪一个都显示同一段，于是在双人局下它也在讲死之执，在单人局下
+   * 它用死之执去解释一个没有死之执的局面。分模式之后，选到什么就读什么。
+   */
+  readonly modeNote: string;
   /** 「游戏」抽屉里那句胜负线说明 */
   readonly rulesNote: string;
   readonly rulesInverted: string;
@@ -49,6 +84,17 @@ export interface ModeUi {
   readonly calling: string;
   readonly stepTitle: string;
   readonly takeoverTitle: string;
+  /**
+   * 「开始 / 继续」按钮的**正文字**（`takeoverTitle` 是它的 tooltip）。
+   *
+   * 两项都要分模式，而且必须**一起**分：它们是同一个按钮（`bToggle`）的两个
+   * 状态，轮流出场。只分一个的话，按钮会在「▶ 开始对弈」与「▶ 继续游戏」
+   * 之间来回跳 —— 同一场对局里两个标签用两套说法，比两边都写错更刺眼。
+   *
+   * 单人局里「对弈」这个词本身就不成立：对弈要有对手，而那里只有你一个。
+   */
+  readonly takeover: string;
+  readonly resume: string;
   readonly subtitleTitle: string;
   readonly memoryDesc: string;
   /** 玩家栏停用的理由（策略 / API 两个抽屉共用同一句） */
@@ -67,11 +113,16 @@ const DUEL: ModeUi = {
   deathColumnEnabled: true,
   deathLegendVisible: true,
   deathWinLabel: "game.deathWin",
+  lifeWinLabel: "game.lifeWin",
+  lifeLabel: "log.roleLife",
+  modeNote: "game.modeNote",
   rulesNote: "game.rulesNote",
   rulesInverted: "game.rulesInverted",
   calling: "status.calling",
   stepTitle: "ctrl.stepTitle",
   takeoverTitle: "ctrl.takeoverTitle",
+  takeover: "ctrl.takeover",
+  resume: "ctrl.resume",
   subtitleTitle: "app.subtitleTitle",
   memoryDesc: "strategy.memoryDesc",
   roleHint: "strategy.perRoleNote",
@@ -89,11 +140,16 @@ const SOLO: ModeUi = {
   deathColumnEnabled: false,
   deathLegendVisible: false,
   deathWinLabel: "game.deathWinSolo",
+  lifeWinLabel: "game.lifeWinSolo",
+  lifeLabel: "log.rolePlayer",
+  modeNote: "game.modeNoteSolo",
   rulesNote: "game.rulesNoteSolo",
   rulesInverted: "game.rulesInvertedSolo",
   calling: "status.callingSolo",
   stepTitle: "ctrl.stepTitleSolo",
   takeoverTitle: "ctrl.takeoverTitleSolo",
+  takeover: "ctrl.takeoverSolo",
+  resume: "ctrl.resumeSolo",
   subtitleTitle: "app.subtitleTitleSolo",
   memoryDesc: "strategy.memoryDescSolo",
   roleHint: "strategy.roleHintSolo",
