@@ -90,6 +90,8 @@ import {
 } from "./chart.js";
 import type { ChartPoint, ChartSeries, MomentumInput } from "./chart.js";
 import { BoardRenderer, FLIP_MS } from "./render.js";
+import { scoreNow, turnScoreViews } from "./score.js";
+import type { ScoreView } from "./score.js";
 import { deserializeTurn, serializeTurn, type StoredTurn } from "./session.js";
 import {
   clearSession,
@@ -267,6 +269,17 @@ interface AppState {
    * 已经不存在了，恢复出一张上一局的热力图只会误导人。
    */
   probs: Record<Role, CellProbabilities | null>;
+  /**
+   * `probs` 是**按哪一副棋盘**算出来的。
+   *
+   * 热力图（③）要按它取值，不能按 `state.board` —— 一回合打到这一步时
+   * `state.board` 已经是**演化之后**的那一副了，而概率是逐格按「这格属于谁的
+   * 候选集」查出来的。两副棋盘对不上，翻过的那一片格子会整片取到 0。
+   * 见 `refreshModelCharts()` 的注释。
+   *
+   * 与 `probs` 同生共死：null = 还没有分布可画。
+   */
+  probsBoard: Board | null;
 }
 
 /** `TurnRecord` 的形状。core 那侧的 `TurnRecord` 走 import type，这里只借它的结构 */
@@ -298,6 +311,7 @@ const state: AppState = {
   shown: null,
   shownIdleKey: "decision.idle",
   probs: { life: null, death: null },
+  probsBoard: null,
 };
 
 const ledEl = $("led");
@@ -409,13 +423,29 @@ const retryPolicy = () => ({ max: store.api.retryMax, baseMs: store.api.retryBas
 
 /* ═══════════ 记分板与页脚 ═══════════ */
 
+/**
+ * 把一组读数写进那五个格子。
+ *
+ * ★ 取值全部来自参数，**不去读 `state`** —— 记分板要能显示「某一副棋盘」的
+ * 读数，而回合进行到一半时 `state.board` 已经是**演化之后**的那一副了
+ * （见 `score.ts` 文件头：数字跑到画面之前就是从这里来的）。
+ */
+function renderScore(v: ScoreView): void {
+  $("sAlive").textContent = String(v.alive);
+  $("sRatio").textContent = pct(v.ratio);
+  $("sTurn").textContent = String(v.turn);
+  $("sMax").textContent = String(v.max);
+  $("sMin").textContent = String(v.min);
+}
+
+/**
+ * 棋盘**瞬时**变化后的记分板（手绘开局、清空、开新局、恢复存档）。
+ *
+ * 这些路径没有动画 —— 方块在点下去的那一刻就变了，所以记分板同步改。
+ * 一回合那两段动画走的是 `renderer.playTurn` 的 `onPhase`，不经过这里。
+ */
 function updateStats(): void {
-  const alive = aliveCount(state.board);
-  $("sAlive").textContent = String(alive);
-  $("sRatio").textContent = pct(ratioOf(alive));
-  $("sTurn").textContent = String(state.turn);
-  $("sMax").textContent = String(state.aliveMax);
-  $("sMin").textContent = String(state.aliveMin);
+  renderScore(scoreNow(state.board, state.turn, state.aliveMax, state.aliveMin));
 }
 
 /**
@@ -552,17 +582,43 @@ function momentumInput(): MomentumInput {
 }
 
 /**
- * 三张图的数据一起刷新。
+ * 卡片二（**模型**）的两张图：③ 当回合的分布 + ① 它的历史。
  *
- * 放在一个函数里是因为它们的**数据源同批更新**（一回合结束时棋盘、占比、分布
- * 全变了），分开写迟早会漏掉一张 —— 而漏掉的那张会停在上一回合，看起来
- * 像「模型这一手没给分布」。
+ * 它们跟着**决策**落地（回包一到就画）—— 那一手是模型刚给出的，画上去就是
+ * 「此刻的读数」，没有「还没发生」的问题。
  */
-function refreshCharts(): void {
+function refreshModelCharts(): void {
   chart.setData(chartSeries());
-  momentum.setData(momentumInput());
-  if (state.probs.life || state.probs.death) heat.setData(buildHeat(state.board, state.probs));
+  // ★ 热力图要按**决策当时**那副棋盘取值，不能按 `state.board`。
+  //
+  // 概率是逐格查出来的：「这一格属于谁的候选集」由那时棋盘上这一格的生死决定
+  // （死格是生之执的候选、活格是死之执的候选）。拿**演化之后**的棋盘去查，
+  // 这一手翻过、或被演化改写过的那一片格子角色就反了 —— 查的是另一张表，
+  // 取回来一片 0。而「每一格都有值、没有空隙」正是这张图的规格。
+  const basis = state.probsBoard ?? state.board;
+  if (state.probs.life || state.probs.death) heat.setData(buildHeat(basis, state.probs));
   else heat.clear();
+}
+
+/**
+ * 卡片一（**游戏**）的那张图：② 生死态势 = 计分板的时间序列。
+ *
+ * ★ 它与记分板同处一卡、说的是同一件事的两个视角，所以**跟同一个时刻走**：
+ * 本回合那个点要等**演化落地**才画。在回包一到就画的话，画面还在落子相，
+ * 曲线已经把这一回合的结局报出来了 —— 与记分板的旧毛病是同一处。
+ *
+ * （序列本身是「整段重算」而不是「追加一个点」，所以即使某一帧因为动画被打断
+ * 而没画成，下一帧也会把该有的点补齐。）
+ */
+function refreshMomentumChart(): void {
+  momentum.setData(momentumInput());
+}
+
+/** 三张图一起刷新。**没有动画**的路径用（恢复存档、失败回合）—— 那时不存在
+ *  「哪一刻」的问题，一次画完 */
+function refreshCharts(): void {
+  refreshModelCharts();
+  refreshMomentumChart();
 }
 
 /* ═══════════ 决策面板 ═══════════ */
@@ -1015,28 +1071,54 @@ async function doTurn(): Promise<void> {
   state.board = next;
   state.turn++;
   state.seen.add(boardKey(state.board));
-  state.aliveMax = Math.max(state.aliveMax, after);
-  state.aliveMin = Math.min(state.aliveMin, after);
+
+  /* ── 这一回合的两帧读数 ──
+     极值（A.MAX / A.MIN）**一次算到演化后**：它是这一局存下来的数，漏掉
+     最后一刻的峰值会让终局统计偏低，而那个数没有第二次机会补。
+     显示则分两帧给（见 `score.ts` 文件头）—— 存的是整局的极值，
+     屏幕上是此刻的那一副。 */
+  const views = turnScoreViews({
+    mid,
+    after: next,
+    turn: state.turn,
+    maxBefore: state.aliveMax,
+    minBefore: state.aliveMin,
+  });
+  state.aliveMax = views.evolve.max;
+  state.aliveMin = views.evolve.min;
 
   /* ── 把这一回合交给棋盘动画 ──
      两段动画（落子 → 演化）的时间线由渲染器自己排，这里只说「翻了哪两格」。
-     粒子也跟着落子走，在渲染器内部生成 —— 撒在哪里是画面的事。 */
+     粒子也跟着落子走，在渲染器内部生成 —— 撒在哪里是画面的事。
 
-  renderer.playTurn({
-    mid,
-    after: next,
-    flips:
-      deathFlip === null
-        ? [{ cell: lifeFlip, role: "life" }]
-        : [
-            { cell: lifeFlip, role: "life" },
-            { cell: deathFlip, role: "death" },
-          ],
-  });
+     ★ 记分板挂在**各段落地的那一刻**上（`onPhase`），而不是在这之后立刻刷：
+     方块真正变的是那两刻，数字要跟它们同步。态势图（②）同理 —— 它与记分板
+     同处一卡、说的都是「游戏本身的客观状态」，本回合那个点要等演化落地才画。 */
+  renderer.playTurn(
+    {
+      mid,
+      after: next,
+      flips:
+        deathFlip === null
+          ? [{ cell: lifeFlip, role: "life" }]
+          : [
+              { cell: lifeFlip, role: "life" },
+              { cell: deathFlip, role: "death" },
+            ],
+    },
+    (phase) => {
+      renderScore(phase === "flip" ? views.flip : views.evolve);
+      if (phase === "evolve") refreshMomentumChart();
+    },
+  );
 
-  /* ── 本回合的分布，供热力图（③）用 ── */
+  /* ── 本回合的分布，供热力图（③）用 ──
+     连同「它是按哪副棋盘算出来的」一起记下来。**这里是 `board`（本回合开始时
+     那一副），不是 `state.board`（已经演化过了）** —— 热力图逐格查表，
+     基准错一副棋盘就会整片取到 0。 */
 
   state.probs = { life: null, death: null };
+  state.probsBoard = board;
   for (let i = 0; i < attempts.length; i++) state.probs[attempts[i].role] = outcomes[i].probs;
 
   /* ── 记账 ── */
@@ -1054,7 +1136,8 @@ async function doTurn(): Promise<void> {
 
   state.shown = decisions;
   renderDecision();
-  updateStats();
+  // ⚠ 记分板**不在这里**更新 —— 它挂在 `playTurn` 的 `onPhase` 上。
+  // 这里刷的话，数字会跑到落子/演化两段动画之前（正是这一处原来的毛病）
 
   pushLog({
     turn: state.turn,
@@ -1133,7 +1216,11 @@ function roleLogOf(
 function pushLog(row: TurnLog): void {
   state.logs.push(row);
   if (state.logs.length > MAX_LOGS) state.logs.shift();
-  refreshCharts();
+  // 只刷卡片二（模型）：日志是**决策**的产物，而卡片一（记分板与态势图）
+  // 跟着棋盘走 —— 成功那一回合由 `playTurn` 的 `onPhase` 在演化落地时刷。
+  //
+  // 失败那一回合没有动画（棋盘没动），卡片一本来就没有新东西要画。
+  refreshModelCharts();
   renderLog();
   persist();
 }
@@ -1370,6 +1457,7 @@ function newGame(): void {
   state.costTotal = 0;
   state.costUnknown = false;
   state.probs = { life: null, death: null };
+  state.probsBoard = null;
 
   // 棋盘直接落到开局（不走动画）：新局的第一帧应当是「初始局面」本身，
   // 而不是一堆方块从零长出来的过程
@@ -1417,6 +1505,7 @@ function applySession(s: Session): void {
   // 分布不进存档（见 AppState.probs），所以热力图恢复不出来，只能回到「等待」。
   // 另外两张图是历史的，照旧画得出来
   state.probs = { life: null, death: null };
+  state.probsBoard = null;
 
   state.costTotal = state.logs.reduce(
     (sum, row) => sum + (row.life?.costUsd ?? 0) + (row.death?.costUsd ?? 0),

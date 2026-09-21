@@ -350,6 +350,15 @@ export interface TurnAnim {
   readonly flips: readonly FlipAnim[];
 }
 
+/**
+ * 一回合的两段动画**各自落地**的那一刻。
+ *
+ * `flip` = 落子已生效（棋盘是 `TurnAnim.mid`），`evolve` = 演化已生效
+ * （棋盘是 `TurnAnim.after`）。名字说的是「哪一段演完了」，不是「谁在动」——
+ * 记分板之类的读数按它决定「该报哪一副棋盘的数」。
+ */
+export type TurnPhase = "flip" | "evolve";
+
 const BASE = "#0b0f14";
 const WELL = "#080b10";
 const LIVE = "#ffffff";
@@ -387,7 +396,7 @@ export class BoardRenderer {
   private raf = 0;
   private lastTs = 0;
   /** 演化相：到点之前先画落子相 */
-  private pending: { board: Board; at: number } | null = null;
+  private pending: { board: Board; at: number; onEvolve?: () => void } | null = null;
   /**
    * 本轮动画的终点（rAF 时间戳）。0 = 当前没有在跑的轮次。
    *
@@ -537,23 +546,44 @@ export class BoardRenderer {
    * 落子相立刻开始（它带发光选框），演化相排在 `flipMs` 之后 —— 两段挤在
    * 同一帧里的话，被演化改写的格子会当场把落子的动画顶掉，而落子的选框
    * 是**唯一**能看出「上一手是谁下的」的地方。
+   *
+   * ★ **`onPhase` 是给记分板这类读数用的**：它在两段**各自落地的那一刻**被调，
+   * 而不是在调用方发请求的那一刻。没有它的话，调用方只能在自己那一侧立刻刷新
+   * 读数 —— 于是画面还在落子相，数字已经把演化后的结局报出来了（详见
+   * `score.ts` 的注释：那是**时机**错，不是算术错，看起来像算错）。
+   *
+   * 时序由渲染器自己持有（`flipMs` 是它的参数、`animations` 关掉时两相会
+   * 合并到同一帧），所以这个通知必须从**这里**发 —— 调用方另起一个
+   * `setTimeout(flipMs)` 就是第二份时间线，两份迟早对不上。
+   *
+   * ⚠ 动画被 `setBoard` / `toggle` / `clear` 打断时，`evolve` **不会**被调
+   * （那一帧的棋盘从来没出现在屏幕上）。所以回调里做的事必须是**幂等且可从
+   * 当前状态重算**的：下一次 `playTurn` 会重新给出两帧，而中断的那一帧本来
+   * 就不该被显示。
    */
-  playTurn(anim: TurnAnim): void {
+  playTurn(anim: TurnAnim, onPhase?: (phase: TurnPhase) => void): void {
     const flips = new Map<Cell, Role | null>();
     for (const f of anim.flips) flips.set(f.cell, f.role);
     this.applyBoard(anim.mid, flips);
+    onPhase?.("flip");
 
     if (this.animations && this.particlesEnabled) {
       for (const f of anim.flips) this.burst(f.cell, this.palette[f.role]);
     }
 
     if (!this.animations) {
+      // 动效关掉 = 两相在同一帧里落地，那就按同一帧报
       this.applyBoard(anim.after, null);
+      onPhase?.("evolve");
       return;
     }
     // rAF 的时间戳与 performance.now() 同源，可以直接比
     const now = performance.now();
-    this.pending = { board: anim.after, at: now + this.flipMs };
+    this.pending = {
+      board: anim.after,
+      at: now + this.flipMs,
+      ...(onPhase ? { onEvolve: () => onPhase("evolve") } : {}),
+    };
     // 一轮的终点定死在时间线上，而不是「等到补间自己停」——
     // 指数补间是渐近的，它的停机判据受帧率与判据阈值影响，
     // 拿它当节拍器会得到「有时 1.8s 有时 2.3s」的抖动
@@ -731,9 +761,14 @@ export class BoardRenderer {
 
     // 落子相演完 → 接上演化相
     if (this.pending && ts >= this.pending.at) {
-      const board = this.pending.board;
+      const { board, onEvolve } = this.pending;
       this.pending = null;
       this.applyBoard(board, null);
+      // 先让棋盘落地再通知：回调此刻若问「渲染器现在摆的是哪一副」，
+      // 拿到的必须是演化后那一副（`pending` 已清、目标值已换）。
+      // 它**看不到**这一帧画完的画 —— 绘制在本轮 tick 的末尾 ——
+      // 所以回调只该写读数，不该去画布上取像素
+      onEvolve?.();
     }
 
     // 演化相 + 空余：到 roundEndsAt 之前都算「还在演」

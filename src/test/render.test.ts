@@ -494,6 +494,96 @@ test("落子相时长可配：相位切换真的等到 flipMs 之后", () => {
   );
 });
 
+/* ═══════════ ★ 两段动画落地的那一刻（记分板挂在它上面）═══════════
+ *
+ * 读数（记分板那五格、态势图本回合那个点）必须跟着方块**真正变的那两刻**走：
+ * 落子落地时报一次、演化落地时报一次。没有这两个通知，调用方只能在自己那一侧
+ * 立刻刷新 —— 于是画面还在落子相，数字已经把这一回合的结局报出来了。
+ */
+
+/** 推进到 t0+ms。逐帧走是必须的，理由见「空转一整回合」那条 */
+function makeAdvancer(frame: (ts: number) => boolean, t0: number) {
+  let i = 0;
+  return (ms: number): boolean => {
+    while ((i + 1) * 16 <= ms) {
+      i++;
+      if (!frame(t0 + 16 * i)) return false;
+    }
+    return true;
+  };
+}
+
+test("★ onPhase：落子相当场报，演化相要等到 flipMs 之后", () => {
+  const { frame } = installRaf();
+  const { canvas } = fakeCanvas();
+  const r = new BoardRenderer(canvas, PALETTE);
+  r.flipMs = 1000;
+  r.resize(400, 400, 4, 4);
+
+  const mid = flip(BOARD, cell(2, 2));
+  const after = lifeStep(mid, "bounded");
+  const phases: string[] = [];
+  const t0 = performance.now();
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] }, (p) => phases.push(p));
+
+  assert.deepEqual(phases, ["flip"], "playTurn 当场就该报落子相 —— 那一帧的方块已经变了");
+
+  const advance = makeAdvancer(frame, t0);
+  advance(960); // 仍在落子相里
+  assert.deepEqual(
+    phases,
+    ["flip"],
+    "还没到 flipMs 就报了演化相 —— 读数又跑到画面前面去了",
+  );
+
+  advance(1100);
+  assert.deepEqual(phases, ["flip", "evolve"], "演化落地了却没报");
+
+  advance(2400);
+  assert.deepEqual(phases, ["flip", "evolve"], "一轮里报了不止一次演化相");
+});
+
+test("★ 动效关掉时两相在同一帧落地，两次通知也当场发（顺序仍是落子在先）", () => {
+  const { frame } = installRaf();
+  const { canvas } = fakeCanvas();
+  const r = new BoardRenderer(canvas, PALETTE);
+  r.animations = false;
+  r.resize(400, 400, 4, 4);
+
+  const mid = flip(BOARD, cell(2, 2));
+  const after = lifeStep(mid, "bounded");
+  const phases: string[] = [];
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] }, (p) => phases.push(p));
+
+  assert.deepEqual(phases, ["flip", "evolve"], "动效关掉时两相合并成一帧，通知也得补齐");
+  assert.equal(frame(performance.now() + 16), false, "动效关掉后不该还排帧");
+});
+
+test("★ 动画被打断时**不会**报演化相 —— 那一帧的棋盘从来没上过屏幕", () => {
+  const { frame } = installRaf();
+  const { canvas } = fakeCanvas();
+  const r = new BoardRenderer(canvas, PALETTE);
+  r.flipMs = 1000;
+  r.resize(400, 400, 4, 4);
+
+  const mid = flip(BOARD, cell(2, 2));
+  const after = lifeStep(mid, "bounded");
+  const phases: string[] = [];
+  const t0 = performance.now();
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] }, (p) => phases.push(p));
+  assert.deepEqual(phases, ["flip"]);
+
+  // 半局中重开 / 恢复存档：直接落到另一副棋盘上，演化那一相被取消
+  r.setBoard(after);
+  const advance = makeAdvancer(frame, t0);
+  advance(2400);
+  assert.deepEqual(
+    phases,
+    ["flip"],
+    "演化相已经被 setBoard 取消，却还是报了 —— 记分板会显示一个从没出现过的局面",
+  );
+});
+
 test("手绘翻转（toggle）：只有缩放，不出选框、不撒粒子", () => {
   // 「开局前玩家点格子摆局面」用的入口。这时**还没有行动方**，
   // 选框与粒子是「某个角色落子」的标记，借过来用会让人以为那是谁下的子

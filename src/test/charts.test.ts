@@ -350,6 +350,38 @@ test("buildHeat：每一格都有值，且恰好被一个角色认领", () => {
   }
 });
 
+test("★ buildHeat 必须按**决策当时**那副棋盘取：换一副棋盘会整片格子取到 0", () => {
+  // 这条锁的是**调用方**（`main.ts` 的 `refreshModelCharts`）不敢拿 `state.board`
+  // 去查：一回合打到画热力图那一步时，`state.board` 已经是**演化之后**的了，
+  // 而概率是按「这格属于谁的候选集」逐格查出来的 —— 两副棋盘对不上，
+  // 这一手翻过、或被演化改写过的那一片格子会整片变成空洞。
+  //
+  // 而「每一格都有值、没有空隙」正是这张图的规格（见上一条），所以这里用
+  // **取到 0 的格子数**当判据：拿错棋盘时它必须 > 0，拿了对的棋盘必须是 0。
+  // 两个角色都要有表（否则缺失的那一方本来就会是 0，测不出「基准错了」）
+  const life = new Map<number, number>();
+  const death = new Map<number, number>();
+  for (let i = 0; i < HEAT_BOARD.cells.length; i++) {
+    (HEAT_BOARD.cells[i] ? death : life).set(i, 0.9 - i * 0.01);
+  }
+  const probs = { life, death };
+
+  const correct = buildHeat(HEAT_BOARD, probs);
+  assert.equal(
+    [...correct.values].filter((v) => v === 0).length,
+    0,
+    "按决策当时那副棋盘取，不该有取不到值的格子",
+  );
+
+  // 换一副棋盘（这里用演化后的那一副）同一个候选格就查不到了
+  const evolved = boardFromRows(["##..", ".##.", "...#", "###."]);
+  const wrong = buildHeat(evolved, probs);
+  assert.ok(
+    [...wrong.values].some((v) => v === 0),
+    "拿另一副棋盘去查居然还每一格都有值 —— 夹具没覆盖到这个失败模式",
+  );
+});
+
 test("buildHeat：归一化的分母是两个角色共用的全局最大值", () => {
   // 按各自的最大值归一化的话，两边的「最亮格」会一样亮，强弱就没法比了 ——
   // 而热力图要回答的正是「模型这一手更想要哪一格」。
