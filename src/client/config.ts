@@ -564,8 +564,7 @@ function readRole(raw: unknown): RoleSettings {
     // 降级成 none 会悄悄改语义（用户要的是「多想一点」，你给它「不许想」），
     // 而降级成别的档位更是凭空替用户做了决定 —— 与 clampEffort 同一条理由
     chainOfThought: raw.chainOfThought === true,
-    allowThinking:
-      raw.allowThinking === "yes" || raw.allowThinking === "no" ? raw.allowThinking : "",
+    allowThinking: isAllowThinking(raw.allowThinking) ? raw.allowThinking : "",
     effort: isEffort(raw.effort) ? raw.effort : "",
     callPolicy: raw.callPolicy === "tool" ? "tool" : "json",
   };
@@ -631,6 +630,50 @@ export function coupleLlmSettings(
   return out;
 }
 
+/** 三个控件的原始表单值。`<select>` 的两个是**未校验的字符串** */
+export interface LlmControlForm {
+  readonly cot: boolean;
+  readonly allow: string;
+  readonly effort: string;
+}
+
+/**
+ * **表单值 → 设置**，再对齐耦合。
+ *
+ * ═══ 为什么这一步要单独存在 ═══
+ *
+ * 它曾经整个缺失：`commitLlmSettings` 直接拿 store 里的旧值去耦合，**从来
+ * 没有读过界面控件**。于是三个控件全部失效 —— 点开关 → store 没变 →
+ * `syncLlmUi()` 立刻按旧值重画 DOM → 开关弹回原状。用户看到的是「灰的、
+ * 点不动」（关的颜色本来就是灰的），而根因和界面显示的东西毫无关联。
+ *
+ * 拆出来的直接好处是**这一步现在可测**：DOM 读取只剩调用方那一行，
+ * 判断全在这里，无头环境断言得了。这与 `coupleLlmSettings` 分开写的理由
+ * 是同一条 —— 上一次 `callPolicy` 出同样的错，就是因为判据埋在回调里，
+ * 没有任何测试覆盖得到。
+ *
+ * ⚠ 两个 `<select>` 的值**必须过校验**再进 store：它们是未校验的字符串，
+ * 直接塞进去会让存档里出现认不出的档位。复用 `roleSettingsOf` 归一化存档
+ * 用的同一对判据（`isAllowThinking` / `isEffort`），不另抄一份。
+ *
+ * @param changed 刚被动的是哪一个 —— 耦合有方向，见 `coupleLlmSettings`
+ */
+export function withLlmControls(
+  s: RoleSettings,
+  form: LlmControlForm,
+  changed: "cot" | "allow" | "effort",
+): RoleSettings {
+  const next: RoleSettings = { ...s };
+  if (changed === "cot") {
+    next.chainOfThought = form.cot;
+  } else if (changed === "allow") {
+    next.allowThinking = isAllowThinking(form.allow) ? form.allow : "";
+  } else {
+    next.effort = isEffort(form.effort) ? form.effort : "";
+  }
+  return coupleLlmSettings(next, changed);
+}
+
 /**
  * 三个思考控件 → **一个**期望下发的思考强度。
  *
@@ -663,8 +706,20 @@ export function effortDegraded(s: RoleSettings, upstream: string): boolean {
   return want !== null && clampEffort(want, upstream) === undefined;
 }
 
+/**
+ * 认得出的「是否允许思考」取值。与界面下拉的三个 option 一一对应。
+ *
+ * 与 `isEffort` 同一条纪律：**判据只写一份**。存档归一化（`roleSettingsOf`）
+ * 与界面读回（`main.ts` 的 `commitLlmSettings`）走的是同一个函数 ——
+ * 界面另抄一份的话，往枚举里加一个取值时两边会各自演化，
+ * 而症状是「存盘认得、界面读回不认得」，离原因很远。
+ */
+export function isAllowThinking(v: unknown): v is "" | "yes" | "no" {
+  return v === "" || v === "yes" || v === "no";
+}
+
 /** 认得出的思考强度档位。与 `llm-broker` 的并集同源，但**在运行时**校验 */
-function isEffort(v: unknown): v is LlmReasoningEffort {
+export function isEffort(v: unknown): v is LlmReasoningEffort {
   return (
     v === "none" ||
     v === "low" ||

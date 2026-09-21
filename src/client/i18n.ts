@@ -141,7 +141,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.colsTitle": "棋盘宽度（列数），2~16",
     "game.rowsTitle": "棋盘高度（行数），2~16",
     "game.sizeUncalibrated":
-      "⚠ 该尺寸的参数未标定：回合上限与胜负线是为 4/8/16 调的，而小棋盘的分辨率粗 —— 4×4 上一格就是 6.25%，0.30 那条线落下去只等于「≥ 5 格」，预设开局本来就有 6 格，一开局就已经越线。这个尺寸上默认值会是什么效果没人知道，自己去「终局规则」里调。该尺寸也没有开局库，只能自己画。",
+      "⚠ 该尺寸的参数未标定：回合上限与胜负线是为 4/8/16 调的，而小棋盘的分辨率粗 —— 4×4 上一格就是 6.25%，0.33 那条线落下去只等于「≥ 6 格」，预设开局本来就有 6 格，一开局就已经越线。这个尺寸上默认值会是什么效果没人知道，自己去「终局规则」里调。该尺寸也没有开局库，只能自己画。",
     "game.torusTiny":
       "⚠ 环绕拓扑 + 极小尺寸（2~3）：能算，但 rows = 2 时 r−1 与 r+1 是同一行，同一个格子会被重复计数 —— 结果是确定的，只是没有对应的几何直觉。",
     "game.mode": "对局模式",
@@ -672,7 +672,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.colsTitle": "Board width (columns), 2–16",
     "game.rowsTitle": "Board height (rows), 2–16",
     "game.sizeUncalibrated":
-      "⚠ This size is uncalibrated: the turn limit and win lines were tuned for 4/8/16, and a small board has coarse resolution — one cell on a 4×4 is 6.25%, so a line at 0.30 means “5 cells or more”, while the preset openings already start at 6 and are past the line on turn 0. Nobody knows what the defaults do at this size; adjust them under “End-of-game rules”. There is no opening library either — draw your own.",
+      "⚠ This size is uncalibrated: the turn limit and win lines were tuned for 4/8/16, and a small board has coarse resolution — one cell on a 4×4 is 6.25%, so a line at 0.33 means “6 cells or more”, while the preset openings already start at 6 and are past the line on turn 0. Nobody knows what the defaults do at this size; adjust them under “End-of-game rules”. There is no opening library either — draw your own.",
     "game.torusTiny":
       "⚠ Torus topology at a tiny size (2–3): it computes, but with rows = 2 the row r−1 and the row r+1 are the same row, so a cell's neighbours are counted more than once — the result is well defined, it just has no matching geometric intuition.",
     "game.mode": "Game mode",

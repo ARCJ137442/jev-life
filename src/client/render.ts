@@ -541,6 +541,35 @@ export class BoardRenderer {
   }
 
   /**
+   * 把还没落地的演化相通知补出去，然后清掉它。
+   *
+   * ═══ 为什么需要它 ═══
+   *
+   * `pending` 是**单个槽位** —— 新的一轮 `playTurn` 会把它整个替换掉，而
+   * `evolve` 相的通知就挂在这个槽位上。于是「决策回得比动画快」时（下一回合
+   * 在演化落地之前就开始），那一次 `evolve` 就此消失，**调用方无从知道少了
+   * 一次通知**。记分板与态势图都挂在它上面，症状是态势图**一个点都不再更新**
+   * ——每回合都丢一次，而画面本身一切正常，看起来像「图卡住了」。
+   *
+   * 补报是安全的，因为 `playTurn` 的约定已经要求过：回调必须**幂等、且能从
+   * 当前状态重算**（`refreshMomentumChart` 读的是当前 state，`renderScore`
+   * 读的是它闭包里捕获的那一副读数）。这正是那条约定存在的意义。
+   *
+   * ⚠ **只补通知，不补棋盘。** 棋盘在调用方那一侧早已提交进 `state.board`
+   * （逻辑先走、动画后演），这里再去 apply 一副旧的，反而会画出一个从来没
+   * 发生过的中间态；紧接着的 `applyBoard(anim.mid, …)` 才是该显示的那一副。
+   *
+   * ⚠ 只在 `playTurn` 开头调，**不放进 `setBoard` / `toggle` / `clear`**：
+   * 那三条是「这一局翻篇了」，补报上一回合的读数没有意义。判据详见 `playTurn`
+   * 的文档——「被下一回合顶掉」与「被打断」看着像，差的正是这一条。
+   */
+  private flushPendingEvolve(): void {
+    const p = this.pending;
+    this.pending = null;
+    p?.onEvolve?.();
+  }
+
+  /**
    * 把一个回合的两段动画排进时间线。
    *
    * 落子相立刻开始（它带发光选框），演化相排在 `flipMs` 之后 —— 两段挤在
@@ -558,10 +587,18 @@ export class BoardRenderer {
    *
    * ⚠ 动画被 `setBoard` / `toggle` / `clear` 打断时，`evolve` **不会**被调
    * （那一帧的棋盘从来没出现在屏幕上）。所以回调里做的事必须是**幂等且可从
-   * 当前状态重算**的：下一次 `playTurn` 会重新给出两帧，而中断的那一帧本来
-   * 就不该被显示。
+   * 当前状态重算**的 —— 这条约束正是下面那个补报能成立的前提。
+   *
+   * ★ 但**被下一次 `playTurn` 顶掉**是另一回事：那一次 `evolve` 必须补报，
+   * 见 `flushPendingEvolve`。两者看着像，差在「这一回合还算不算数」——
+   * `setBoard` / `clear` 是「这一局翻篇了」，而连续的 `playTurn` 是同一局里的
+   * 下一回合，上一回合的读数本来就该落地。
    */
   playTurn(anim: TurnAnim, onPhase?: (phase: TurnPhase) => void): void {
+    // 上一回合若还没演化完就被这一回合接上，先把它的通知补出去 —— 见
+    // `flushPendingEvolve`。必须在本函数改动任何渲染状态**之前**调
+    this.flushPendingEvolve();
+
     const flips = new Map<Cell, Role | null>();
     for (const f of anim.flips) flips.set(f.cell, f.role);
     this.applyBoard(anim.mid, flips);

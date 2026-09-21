@@ -543,6 +543,39 @@ test("★ onPhase：落子相当场报，演化相要等到 flipMs 之后", () =
   assert.deepEqual(phases, ["flip", "evolve"], "一轮里报了不止一次演化相");
 });
 
+test("★ 被下一回合顶掉时，上一回合的演化相要**补报**（否则态势图一个点都不再更新）", () => {
+  const { frame } = installRaf();
+  const { canvas } = fakeCanvas();
+  const r = new BoardRenderer(canvas, PALETTE);
+  r.flipMs = 1000;
+  r.resize(400, 400, 4, 4);
+
+  const mid = flip(BOARD, cell(2, 2));
+  const after = lifeStep(mid, "bounded");
+  const phases: string[] = [];
+  const t0 = performance.now();
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] }, (p) => phases.push(p));
+  assert.deepEqual(phases, ["flip"]);
+
+  // 决策回得比动画快：演化还没到点，下一回合就开演了。`pending` 是**单个槽位**，
+  // 直接替换的话那一次 evolve 就此消失，而调用方无从知道少了一次通知 ——
+  // 记分板与态势图都挂在它上面，症状是图一个点都不再更新、画面却一切正常
+  const mid2 = flip(after, cell(1, 1));
+  const after2 = lifeStep(mid2, "bounded");
+  r.playTurn({ mid: mid2, after: after2, flips: [{ cell: cell(1, 1), role: "life" }] }, (p) =>
+    phases.push(p),
+  );
+  assert.deepEqual(
+    phases,
+    ["flip", "evolve", "flip"],
+    "上一回合的演化相被顶掉了 —— 挂在它上面的记分板与态势图会少一次更新",
+  );
+
+  // 新的那一回合照常演完，补报没有打乱它
+  makeAdvancer(frame, t0)(1100);
+  assert.deepEqual(phases, ["flip", "evolve", "flip", "evolve"]);
+});
+
 test("★ 动效关掉时两相在同一帧落地，两次通知也当场发（顺序仍是落子在先）", () => {
   const { frame } = installRaf();
   const { canvas } = fakeCanvas();

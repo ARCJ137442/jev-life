@@ -28,6 +28,7 @@ import {
   presetFor,
   presetRulesFor,
   templatesOf,
+  withLlmControls,
 } from "../client/config.js";
 import { DEFAULT_TEMPLATES } from "../core/template.js";
 import type { RuleTemplates } from "../core/template.js";
@@ -140,12 +141,12 @@ test("防抖轮数：下限 1，上限 99", () => {
 });
 
 test("★ 预设的胜负线是出厂值的来源，且 4×4 与 8×8 **不共用**一条生之执线", () => {
-  // 0.30 在 4×4 上只等于「≥ 5 格」，而预设开局 beacon / toad 本来就是 6 格
+  // 0.33 在 4×4 上只等于「≥ 6 格」，而预设开局 beacon / toad 本来就是 6 格
   // （37.5%）—— 一开局就已经越过胜负线。所以这一档单独取 0.5。
   // 这一条钉的是「4×4 不参与跨尺寸比较」那条判断，别被后人顺手合并回去
   const r4 = presetRulesFor(4, 4);
   const r8 = presetRulesFor(8, 8);
-  assert.equal(r8.lifeWinRatio, 0.3);
+  assert.equal(r8.lifeWinRatio, 0.33);
   assert.equal(r4.lifeWinRatio, 0.5);
   assert.notEqual(r4.lifeWinRatio, r8.lifeWinRatio, "4×4 的线必须比 8×8 高");
 
@@ -265,6 +266,64 @@ test("★ 三处状态说的是同一件事，耦合函数把它们对齐（三�
   assert.equal(s.allowThinking, "");
   assert.equal(s.effort, "");
   assert.equal(desiredEffort(s), null, "开思维链 + 留空 = 用上游默认，不是 none");
+});
+
+/* ═══════════ ★ 控件值 → 设置：曾经整个缺失的那半步 ═══════════
+ *
+ * 上面那组用例全都先手动 `s.effort = "high"` 之类再调 `coupleLlmSettings` ——
+ * 那一步正是**生产代码漏掉的**：界面上那三个控件从来没有人读过，于是点开关
+ * 之后 store 没变、`syncLlmUi()` 按旧值重画、开关弹回原状，而这一整组用例
+ * 依然全绿。
+ *
+ * 所以这里断言的是「**读回**」本身，不是耦合规则 —— 耦合规则上面已经测过了。
+ */
+
+test("★ 拨动思维链真的会写进设置（不是只有耦合在动）", () => {
+  const off = llm({ chainOfThought: false });
+  const on = withLlmControls(off, { cot: true, allow: "no", effort: "none" }, "cot");
+
+  assert.equal(on.chainOfThought, true, "拨开思维链却没写进设置 —— 开关会弹回去");
+  assert.equal(on.allowThinking, "", "开思维链要一并解除原先的「否」");
+  assert.equal(on.effort, "", "并解除 none");
+  assert.equal(desiredEffort(on), null, "开思维链 + 留空 = 用上游默认，不是 none");
+
+  // 拨回去：三处一起回到「关」
+  const back = withLlmControls(on, { cot: false, allow: "", effort: "" }, "cot");
+  assert.equal(back.chainOfThought, false);
+  assert.equal(desiredEffort(back), "none");
+});
+
+test("★ 两个 <select> 是未校验的字符串，要过校验才进设置", () => {
+  const base = llm({ chainOfThought: true });
+
+  // 认不出的值一律回落成「留空」，**不往最近的档位上凑** —— 与 roleSettingsOf
+  // 归一化存档是同一条判据（这里复用同一个函数，不是另抄一份）
+  assert.equal(
+    withLlmControls(base, { cot: true, allow: "maybe", effort: "" }, "allow").allowThinking,
+    "",
+  );
+  assert.equal(
+    withLlmControls(base, { cot: true, allow: "", effort: "ultra" }, "effort").effort,
+    "",
+  );
+
+  // 认得出的照常写进去
+  assert.equal(
+    withLlmControls(base, { cot: true, allow: "yes", effort: "" }, "allow").allowThinking,
+    "yes",
+  );
+  assert.equal(
+    withLlmControls(base, { cot: true, allow: "", effort: "max" }, "effort").effort,
+    "max",
+  );
+});
+
+test("★ 只动一个控件时，另外两个不被顺手改掉", () => {
+  // 用户已经把状态拨成「开 + 高」，此时只拨「允许思考 = 是」，强度不该被动
+  const s = llm({ chainOfThought: true, allowThinking: "", effort: "high" });
+  const after = withLlmControls(s, { cot: true, allow: "yes", effort: "high" }, "allow");
+  assert.equal(after.effort, "high", "改「是否允许思考」不该把已选好的档位清掉");
+  assert.equal(after.chainOfThought, true);
 });
 
 test("★ 降级提示：收不了的档位要在下发**之前**就说出来", () => {

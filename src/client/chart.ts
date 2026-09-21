@@ -611,7 +611,7 @@ export class MomentumChart {
     // ⚠ 曾经还有一条 0.5 中线（「二分线」）。它已经删掉（用户 2026-09-21 定）：
     // 折线既是国界线之后，中线不再决定填色、也不再决定任何读数，留着的唯一
     // 效果是让人去找它对应什么 —— 而 0.5 在这个博弈里**没有任何特殊含义**
-    // （两条胜负线是 0.30 与 0.05，都不在中间）。一条没有语义的参考线比没有更坏。
+    // （两条胜负线是 0.33 与 0.05，都不在中间）。一条没有语义的参考线比没有更坏。
     this.thresholdLine(ctx, w, yOf(rules.lifeWinRatio), this.palette.life, rules.lifeWinRatio);
     this.thresholdLine(ctx, w, yOf(rules.deathWinRatio), this.palette.death, rules.deathWinRatio);
 

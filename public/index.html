@@ -680,7 +680,11 @@ textarea{resize:vertical}
 
       <div class="slider-row" style="margin-top:11px">
         <span class="tinylbl" style="margin:0;color:var(--green)" data-i18n="game.lifeWin">生之执获胜线</span>
-        <input type="number" class="numin" id="inpLifeWin" min="0" max="100" step="1" value="30">
+        <!-- ⚠ 这个 value 必须与 `presets.ts` 的 RULES_8.lifeWinRatio 一致。
+             两者对不上时不会报错：新建一局用的是 JS 里的默认值，而面板上
+             显示的是这里的值 —— 用户会看到「界面写 33、实际按 30 判」，
+             而这种不一致最容易被当成「判定有 bug」排查半天 -->
+        <input type="number" class="numin" id="inpLifeWin" min="0" max="100" step="1" value="33">
         <span class="tinylbl" style="margin:0">%</span>
         <span class="tinylbl" style="margin:0" data-i18n="game.streak">连续</span>
         <input type="number" class="numin" id="inpLifeStreak" min="1" max="99" step="1" value="3">

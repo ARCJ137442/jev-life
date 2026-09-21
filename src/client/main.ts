@@ -67,7 +67,6 @@ import {
   clampSize,
   clampStreak,
   clampTurnLimit,
-  coupleLlmSettings,
   defaultRole,
   desiredEffort,
   effortDegraded,
@@ -76,6 +75,7 @@ import {
   presetFor,
   save,
   templatesOf,
+  withLlmControls,
   type ArchiveSettings,
   type Persisted,
   type RoleSettings,
@@ -2024,7 +2024,7 @@ function syncGameUi(): void {
   $("topoWarn").style.display = tinyTorus ? "block" : "none";
 
   // 胜负线是**玩家可填**的（用户 2026-09-21 定）。四个框存的都是**整数百分比**
-  // —— 与图上的标注同一套口径，省掉「0.30 到底是几成」那种心算
+  // —— 与图上的标注同一套口径，省掉「0.33 到底是几成」那种心算
   $<HTMLInputElement>("inpLifeWin").value = String(Math.round(store.duel.lifeWinRatio * 100));
   $<HTMLInputElement>("inpLifeStreak").value = String(store.duel.lifeStreak);
   $<HTMLInputElement>("inpDeathWin").value = String(Math.round(store.duel.deathWinRatio * 100));
@@ -2568,9 +2568,18 @@ function llmCallOf(role: Role): LlmCallOptions | undefined {
  *   3. 「该后端不支持，已降级为默认」—— 能力的收敛在服务端做，而用户要在
  *      点下去**之前**知道这一档在这条后端上等于没设
  */
-function syncLlmUi(): void {
+/**
+ * @param provider 以**哪一条后端**为准来判断可见性与降级提示，默认取已保存的。
+ *
+ *   ★ 这个参数是必须的，不是可选糖：切换后端下拉时 **store 里还是旧值**
+ *   （要等点「保存」才写回），所以 `onBackendSwitch` 若调无参版本，读到的
+ *   是切换**前**那条 —— 于是选中一条 LLM 后端时这一块不亮，非得先保存一次
+ *   才出现。控件值本身仍然取已保存的设置（它们是**按玩家**存的，不随后端走；
+ *   换回别的后端时值留着，见 `index.html` 里 `llmCfg` 那段注释）。
+ */
+function syncLlmUi(provider?: BackendId): void {
   const s = store.roles[state.role];
-  const b = BACKENDS[s.provider];
+  const b = BACKENDS[provider ?? s.provider];
   $("llmCfg").style.display = b.isLlm ? "" : "none";
   if (!b.isLlm) return;
 
@@ -2593,9 +2602,25 @@ function syncLlmUi(): void {
   $("effortWarn").style.display = "block";
 }
 
-/** 三个思考控件改完之后走同一条路：先对齐耦合，再存盘重画 */
+/**
+ * 三个思考控件改完之后走同一条路：**先读回 DOM**，再对齐耦合，存盘重画。
+ *
+ * ★ 那个「先读回 DOM」的一步**曾经整个缺失**，于是三个控件全部失效：
+ * 点开关 → store 没变 → `syncLlmUi()` 立刻按*旧值*重画 DOM → 开关弹回去。
+ * 用户看到的是「灰的、点不动」（关的颜色本来就是灰的），而根因在
+ * 「界面控件从来没有人读过」—— 这与 `callPolicy` 那次是同一类错，
+ * 也是 `syncModeUi` 的注释里预言过的那个症状。
+ *
+ * 「读回并校验」的那一半住在 `config.ts` 的 `withLlmControls` 里 ——
+ * 它是纯函数，无头环境断言得了；这里只剩把 DOM 的值取出来这一行。
+ */
 function commitLlmSettings(changed: "cot" | "allow" | "effort"): void {
-  store.roles[state.role] = coupleLlmSettings(store.roles[state.role], changed);
+  const form = {
+    cot: $<HTMLInputElement>("inpCot").checked,
+    allow: $<HTMLSelectElement>("inpAllowThink").value,
+    effort: $<HTMLSelectElement>("inpEffort").value,
+  };
+  store.roles[state.role] = withLlmControls(store.roles[state.role], form, changed);
   save(store);
   syncLlmUi();
 }
@@ -2640,7 +2665,8 @@ function onBackendSwitch(): void {
   $<HTMLInputElement>("inpModel").value = "";
   $<HTMLInputElement>("inpModel").placeholder = b.managed ? t("backend.modelManaged") : b.model;
   applyBackendGating(provider);
-  syncLlmUi();
+  // 传下拉框的**当前值**，不是 store 里的旧值 —— 见 `syncLlmUi` 的参数说明
+  syncLlmUi(provider);
 }
 
 /**
