@@ -17,7 +17,25 @@
 判断任何改动是否合适，先问：*它会让测量更干净，还是更浑浊？*
 
 它相对 `jev-2048` 的增量是两件可独立取用的产物：
-1. 「**Jev 的并行决策到底值多少钱**」的测量（64 个问题一次发 vs LLM 的 N 次往返）
+1. 「**Jev 的并行决策到底值多少钱**」的测量（一次发一批问题 vs LLM 的 N 次往返）
+
+   题数**不是固定 64**，而是 `legalCells(board, role)` 的规模（`channels.ts`）。
+   `life.ts:121` 是 `const want = role === "life" ? 0 : 1` —— **生之执发的是死格，
+   死之执发的才是活格**，两个角色问的根本不是同一批格子。
+
+   实测（遍历 `PRESETS` 的全部开局，格式为「生之执 / 死之执」）：
+
+   | 尺寸 | 开局 | 活 / 死 | 题数 |
+   |---|---|---|---|
+   | 4×4 | blinker | 3 / 13 | 13 / 3 |
+   | 8×8 | block-glider（默认） | 9 / 55 | **55 / 9** |
+   | 8×8 | beacon / toad / eater1 | 6–7 / 57–58 | 57–58 / 6–7 |
+   | 16×16 | block-mesh | 64 / 192 | 192 / 64 |
+   | 16×16 | dense-random | 131 / 125 | **125 / 131**（唯一一个倒过来的） |
+
+   所以「并行决策省了多少次往返」这句话，**必须连同尺寸与开局一起说**——
+   只报一个数就是在编。注意 16×16 的 `dense-random`：活格多于死格，
+   死之执的题数反而**超过**生之执，题数多少与角色没有固定的大小关系。
 2. 「**LLM 转 Jev**」的 broker —— 一个 Jev 兼容的 API 层，能把任意 LLM 包成 Jev
 
 ---
@@ -114,38 +132,50 @@ npm run typecheck                       # 五份 tsconfig
 
 ## 结构
 
-`✓` = 已有，`⏳` = 计划中但**还没建**（括号里是负责它的任务号）。
+M1 全部任务已落地，`⏳` 标记已无幸存者。逐文件的模块树见 `README.md`（那份经过逐文件
+核对），这里只列**边界**——即「什么东西住在哪一层、为什么」。
 
 ```
 src/core/                ★ 无 DOM、无网络，Node 直接可跑
-  types.ts               ✓ Board / Role / Topology / GameRules / GameSnapshot / Termination
-  life.ts                ✓ 演化 / 翻转 / 合法格 / 状态哈希 / 终局判定
-  patterns.ts            ✓ 结构检测库（按棋盘尺寸分级收录）
-  presets.ts             ✓ 尺寸预设 + 开局库
-  context.ts             ✓ buildState / buildQuestions（★ 见下方「T12 必须做的一次搬迁」）
-  decide.ts              ⏳ 概率分布 → 动作（T11）
-  channels.ts            ⏳ 三条评估通道（T13）
-src/shared/types.ts      ⏳ 共享类型；`src/shared/` 目录已存在但为空
-src/client/              ⏳ 浏览器 UI（**目录尚未创建**，T12 起）
-src/server/server.ts     ✓ 静态托管的**占位实现**（T12 换成带密钥代理的正式版）
-src/test/                ✓ 8 个测试文件，100 条用例
-tools/                   ✓ _load / bench-step / check-dom / scan-secrets / scan / seal-key
-docs/plans/              ✓ 执行计划（M1 全部任务）
-docs/ui-spec.md          ✓ UI 规格（T14–T15 的定稿）
-docs/llm-backends.md     ✓ LLM 后端规格（**文档先行**，等时机到了再交给 subagent 实现）
+  types.ts               Board / Role / Topology / GameRules / GameSnapshot / Termination
+  life.ts                演化 / 翻转 / 合法格 / 状态哈希 / 终局判定
+  patterns.ts            结构检测库（按棋盘尺寸分级收录）
+  presets.ts             尺寸预设 + 开局库
+  context.ts             buildState / buildQuestions
+  decide.ts              概率分布 → 动作
+  channels.ts            三条评估通道（★ 题数 = legalCells 的规模，见开篇）
+  template.ts            提示词模板：模板 + 自动填充，占位符表与 vars 双向校验
+src/shared/              Jev 协议最小集 + LLM 后端抽象 + broker
+  types.ts               NoulType / Criteria / Question(s) / TurnRecord / noulDiscriminator
+  backend.ts             LLM 后端抽象（请求体形状、desiredEffort / llmCallOf）
+  llm-broker.ts          「LLM 转 Jev」——把任意 LLM 包成 Jev 兼容的一层
+src/client/              浏览器 UI（11 个模块，main.ts 是入口）
+  main.ts  render.ts  chart.ts  score.ts  config.ts  api.ts
+  archive.ts  session.ts  mode.ts  i18n.ts  deploy.ts
+src/server/              带密钥代理的正式实现
+  server.ts              静态托管 + /api/* 代理
+  seal.ts                *.sealed 的封存 / 解封
+api/                     Vercel 三条 Serverless 入口（_upstream / evaluate / evaluate2 / evaluate3）
+public/index.html        客户端 HTML（改它或改 src/client/ 都要跑 check-dom.ts）
+src/test/                22 个测试文件，447 条用例
+tools/                   _load / bench-step / check-dom / play / scan / scan-secrets / seal-key
+docs/plans/              执行计划（M1 全部任务）
+docs/ui-spec.md          UI 规格
+docs/llm-backends.md     LLM 后端规格
 ```
 
-### ⚠ T12 必须做的一次搬迁
+### ⚠ 两条已经从「待办」变成「别改回去」
 
-`context.ts` 里**暂时**住着 Jev 协议的最小集（`NoulType` / `Criteria` / `Question` /
-`Questions` / `noulDiscriminator`）与 `TurnRecord`。**T12 建好 `src/shared/types.ts` 后
-必须把它们搬过去并删掉原地的副本** —— 否则同一个类型会有两份，而两份类型定义迟早会
-各自演化（`jev-2048` 的 `Strategy` 类型就被定义了两遍）。
+**① 类型不许有两份。** Jev 协议的最小集一度**暂时**住在 `context.ts` 里，等
+`src/shared/types.ts` 建好后搬了过去（`context.ts:43-44` 现在从这里 import）。
+**搬完了，原地的副本已删。** 之所以留这条记录：两份类型定义迟早会各自演化——
+`jev-2048` 的 `Strategy` 类型就被定义了两遍。谁想「就近定义一下省个 import」，先看这里。
 
-### ⚠ `tools/seal-key.ts` 现在跑不了
-
-它 import 的 `src/server/seal.ts` 要到 T12 才建，因此被排除在 `tsconfig.tools.json` 之外。
-T12 建出 `seal.ts` 后要把那行 exclude 删掉。
+**② 空转的 exclude 不许留。** `tsconfig.tools.json` 曾经有一条
+`"exclude": ["tools/seal-key.ts"]`，那是被迫的（它 import 的 `seal.ts` 当时还不存在）。
+`seal.ts` 建出来后那行已删。**Node 的 type-stripping 只擦类型、不校验**，所以一个
+空转的排除项等于让那个脚本完全失去类型保证——而 `seal-key.ts` 是个安全工具。
+五份 tsconfig 现在覆盖全部源码，一个空转项都不留。
 
 ---
 
