@@ -198,7 +198,10 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     base: "/api/evaluate3",
     model: "agnes-2.5-flash",
     noteKey: "backend.llmFreeTrialDesc",
-    verified: false,
+    // 实测：2026-09-21 界面端到端跑通。它与两条 Jev 协议免费后端在同一轮
+    // 试玩里一起验的 —— 也就是说这四条「选上就能用、不用自备 key」的后端
+    // 现在全部实测过。
+    verified: true,
     managed: true,
     needsKey: false,
     isLlm: true,
@@ -273,8 +276,13 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     base: "https://api.deepseek.com/v1",
     model: "deepseek-flash",
     noteKey: "backend.llmOpenaiDesc",
-    // 实测：这条端点用真 key 直连跑通过（协议形状、CORS 头都验过）。
-    // 但用户改填别的地址之后，那就不再是这里验过的东西了
+    // 实测：这条端点用**真的 DeepSeek key** 直连跑通过（协议形状、CORS 头
+    // 都验过），而且是**两种调用策略各跑一遍** —— 一次性 JSON 与工具循环
+    // 都通了。DESIGN.md 第九节里那组付费对照用的就是这个后端。
+    //
+    // ⚠ 用户改填别的地址之后，那就不再是这里验过的东西了 —— 这句话对本条
+    // 尤其要紧：`verified` 说的是**预置的那个端点**，不是「OpenAI 兼容」
+    // 这个协议类别。
     verified: true,
     managed: false,
     needsKey: true,
@@ -287,11 +295,20 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     base: "https://api.anthropic.com/v1",
     model: "claude-opus-5",
     noteKey: "backend.llmAnthropicDesc",
-    // ⚠ **未实测。** Anthropic 协议的形状本身验过了（在一家兼容端点上，
-    // 用真 key 打的真请求），但**官方 api.anthropic.com 没验过** ——
-    // 本项目没有 Anthropic 的 key，而且从开发环境发出的预检请求被挡在
-    // 403，连「能不能浏览器直连」都没能实测。所以这条不敢标「已实测可用」
-    verified: false,
+    // ★ 已实测（2026-09-21，真 key，**浏览器直连官方 api.anthropic.com**，
+    // 一次性 JSON 与工具循环两种调用策略都跑通）。
+    //
+    // 这里曾经写着「官方端点没验过」，依据是从开发环境手工发的预检请求
+    // 全部变体都被挡在 403。**那个结论是错的 —— 错在探针，不在端点。**
+    // 官方端点认的是 `anthropic-dangerous-direct-browser-access: true`
+    // （请求头构造无条件带上它，见 `shared/backend.ts`），而当时那个手工
+    // 探针没发这个头。真实浏览器带上它之后是通的。
+    //
+    // 教训与 DESIGN.md 第九节规则 1 同源（那次也是探针把限流读成了
+    // 「模型不行」）：**一个失败的探针证明不了被探的对象不行，除非先
+    // 排除「探针自己错了」这个可能。** 当时直接记成了「端点连不上」，
+    // 于是这条后端白白挂着「未实测」的标签。
+    verified: true,
     managed: false,
     needsKey: true,
     isLlm: true,

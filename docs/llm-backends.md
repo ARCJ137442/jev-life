@@ -64,6 +64,12 @@ broker 翻译也在服务端做。
 Anthropic 兼容端点 `POST {base}/messages`），**全部与协议文档一致**，没有
 出现 `noul` / `boolean` 那种「文档说一套、网关做一套」：
 
+> **补记（同日稍晚）**：下面这张 CORS 表里的官方端点那条，后来又用真 key
+> 从浏览器直连验了一次 —— 通了，且两种调用策略都通。当时表里记的「403、
+> 没能实测成功」是把探针的失败当成了端点的属性。**订正过程与教训见下方
+> 「★ 那个 403 是探针的错」。** 也就是说这一列的形状**在两个端点上**都对得上，
+> 不只是 Agnes。
+
 | 项 | 实测结果 |
 |---|---|
 | 路径 / 认证头 / 版本头 | `POST /v1/messages` · `x-api-key` · `anthropic-version: 2023-06-01` ✓ |
@@ -93,13 +99,28 @@ Anthropic 兼容端点 `POST {base}/messages`），**全部与协议文档一致
 |---|---|
 | Agnes（两种协议同一个 host） | 预检 204，`Access-Control-Allow-Origin: *`、`Allow-Headers: *` ⟹ **可浏览器直连** |
 | DeepSeek | 预检 200，回显 Origin，`Allow-Headers: authorization,content-type` ⟹ **可浏览器直连** |
-| `api.anthropic.com` 官方 | 本环境发出的预检**全部变体都回 403**（含带 `anthropic-dangerous-direct-browser-access` 的那种），拿不到 CORS 头。**没能实测成功** |
+| `api.anthropic.com` 官方 | 手工预检全部变体回 403 —— **但这条结论已被推翻，见下** |
 
-关于官方 API 那个头：文档明确要求浏览器请求带
+### ★ 那个 403 是探针的错，不是端点的错（2026-09-21 订正）
+
+上面那行原来记的是「没能实测成功」，并据此把整个后端标成「未实测」。
+**这个结论是错的。**
+
+真实浏览器直连**官方端点跑得通**（真 key，一次性 JSON 与工具循环两种调用策略
+都验过）。官方端点认的是请求头
 `anthropic-dangerous-direct-browser-access: true`（SDK 的 `dangerouslyAllowBrowser`
-就是加它），不带会回 `CORS requests must set 'anthropic-dangerous-direct-browser-access' header`。
-**本条来自官方文档与社区资料，不是本项目的实测** —— 本项目没有 Anthropic 的密钥，
-预检又被挡在 403，所以官方端点这条后端在界面上标的是「未实测」。
+就是加它，不带会回 `CORS requests must set 'anthropic-dangerous-direct-browser-access' header`），
+而 `shared/backend.ts` 的请求头构造**无条件带上它**。当时那个手工探针没发这个头 ——
+所以 403 反映的是**探针没带那个头**，不是「浏览器连不上」。
+
+> **教训**：一个失败的探针证明不了被探的对象不行，除非先排除「探针自己错了」
+> 这个可能。这与本节规则 1 是同一类错 —— 那次探针把 429 限流读成了「模型不行」，
+> 这次把「缺一个头」读成了「端点拒绝跨域」。**两次都是拿探针的失败直接当成了
+> 对象的属性。**
+>
+> 代价也是真的：这条后端因此白挂了一段时间的「未实测」标签，界面文案还照着
+> 这个错误结论写给用户看。当时的措辞是「本项目没有 Anthropic 的密钥」——
+> 但「我没有 key 所以没验」和「这个端点验不了」是两回事，当时写成了后者。
 
 **效力未定的两处**（如实记，别当成已验证）：
 
