@@ -478,6 +478,41 @@ export class BoardRenderer {
     return { x: this.pad + (cell % this.cols) * step, y: this.pad + Math.floor(cell / this.cols) * step };
   }
 
+  /**
+   * 视口坐标 → 格号。落在格子外（含四周留白与格子之间的缝）时返回 null。
+   *
+   * 给「开始对弈之前手绘开局」用。**几何只在这里算一次** —— 把 pad / gap /
+   * cellPx 抄到调用方去，改一次 GUTTER_K 就会得到「点得中但画不到」这种
+   * 只在特定尺寸下出现的错位，而它看起来像点击没生效。
+   *
+   * 用的是 `getBoundingClientRect()` 而不是 `offsetX/offsetY`：canvas 的 CSS
+   * 尺寸与它的位图尺寸（DPR 缩放后）不是一回事，offsetX 在部分浏览器上给的
+   * 是位图坐标，于是高 DPR 屏上点哪儿都偏。
+   */
+  cellAtPoint(clientX: number, clientY: number): Cell | null {
+    if (this.cellPx <= 0 || this.cols <= 0 || this.rows <= 0) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+
+    // CSS 像素 → 内部几何单位（resize 时算的是 CSS 像素，两者同尺度；
+    // 这一层换算只是为了防止 canvas 被外层 CSS 拉伸过）
+    const x = ((clientX - rect.left) / rect.width) * this.cssW;
+    const y = ((clientY - rect.top) / rect.height) * this.cssH;
+
+    const step = this.cellPx + this.gap;
+    const col = Math.floor((x - this.pad) / step);
+    const row = Math.floor((y - this.pad) / step);
+    if (col < 0 || col >= this.cols || row < 0 || row >= this.rows) return null;
+
+    // 缝里（格子的右/下留白）不算命中 —— 否则相邻两格会争同一条边界，
+    // 而谁赢取决于浮点误差
+    const inX = x - this.pad - col * step;
+    const inY = y - this.pad - row * step;
+    if (inX > this.cellPx || inY > this.cellPx) return null;
+
+    return row * this.cols + col;
+  }
+
   /** 连续格坐标 → 像素坐标（粒子用）。整数部分是格索引，小数部分是格内偏移 */
   private pxFrac(gx: number, gy: number): { x: number; y: number } {
     const step = this.cellPx + this.gap;

@@ -560,3 +560,70 @@ test("setBoard 直接落地：新局的棋盘不做动画", () => {
   assert.equal(frame(performance.now() + 16), false, "setBoard 之后不该有任何帧在跑");
   assert.equal(ctx.arcCalls.length, 0, "开局不该有粒子");
 });
+
+/* ═══════════ 手绘开局的命中判定 ═══════════ */
+
+/**
+ * `cellAtPoint` 是「点格子即翻转」唯一的几何出口。
+ *
+ * 它错了不会报任何异常 —— 表现是「点这一格，那一格亮了」，或者更糟：
+ * 点哪儿都没反应。而这两种症状与真正的原因（pad / gap / cellPx 抄错了一处）
+ * 在界面上完全看不出关联，正是本项目反复出现的那个母题。
+ */
+test("命中判定：格心落本格，缝里与留白落空，长宽不等时行列不串", () => {
+  const { canvas } = fakeCanvas();
+  const r = new BoardRenderer(canvas, PALETTE);
+
+  // ── 4×4 ──
+  assert.equal(r.resize(400, 400, 4, 4), true);
+  const cell = 89; // floor(400 / (4 + 5×GUTTER_K))
+  const step = cell + cell * GUTTER_K;
+  const pad = cell * GUTTER_K;
+  const at = (row: number, col: number): [number, number] => [
+    pad + col * step + cell / 2,
+    pad + row * step + cell / 2,
+  ];
+
+  for (const [row, col] of [
+    [0, 0],
+    [0, 3],
+    [3, 0],
+    [3, 3],
+    [1, 2],
+  ] as const) {
+    const [x, y] = at(row, col);
+    assert.equal(
+      r.cellAtPoint(x, y),
+      row * 4 + col,
+      `(${row},${col}) 的格心应当命中 ${row * 4 + col}`,
+    );
+  }
+
+  // 格子之间那条缝：不算命中。算进去的话相邻两格会争同一条边界，
+  // 谁赢取决于浮点误差
+  assert.equal(
+    r.cellAtPoint(pad + cell + (step - cell) / 2, pad + cell / 2),
+    null,
+    "格子右侧的缝不该算任何一格",
+  );
+  // 四周留白
+  assert.equal(r.cellAtPoint(2, 200), null, "左留白不该算任何一格");
+  assert.equal(r.cellAtPoint(394, 200), null, "右留白之外不该算任何一格");
+
+  // ── 长宽不等：行列必须按各自的数走（用户要的是「各自可设」）──
+  assert.equal(r.resize(400, 400, 3, 5), true);
+  const cell2 = 72; // floor(min(400/(3+4k), 400/(5+6k)))
+  const step2 = cell2 + cell2 * GUTTER_K;
+  const pad2 = cell2 * GUTTER_K;
+  assert.equal(
+    r.cellAtPoint(pad2 + 2 * step2 + cell2 / 2, pad2 + 4 * step2 + cell2 / 2),
+    4 * 3 + 2,
+    "3 列 5 行下，(4,2) 应当命中格 14 —— 按 4 列算会得到 18",
+  );
+});
+
+test("命中判定：还没 resize（尺寸为 0）时返回 null，而不是算出一个越界格", () => {
+  const { canvas } = fakeCanvas();
+  const r = new BoardRenderer(canvas, PALETTE);
+  assert.equal(r.cellAtPoint(10, 10), null);
+});

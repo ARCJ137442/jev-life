@@ -20,6 +20,7 @@
  * 否则每换一次对照都要手配两遍。见 `main.ts` 的 `syncRoleSettings()`。
  */
 import type { Role, Topology } from "../core/types.js";
+import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
 import type { Channel } from "../core/channels.js";
 import type { Strategy } from "../core/decide.js";
 import type { BackendId } from "./api.js";
@@ -37,7 +38,20 @@ const KEY = "jevlife.v1";
 /* ══════════════ 对局级 ══════════════ */
 
 export interface DuelSettings {
-  /** 棋盘尺寸。只接受 `PRESETS` 里的三档 —— 每档的规则与开局库都是单独配的 */
+  /**
+   * 棋盘尺寸。**长与宽各自 2~16**，可以是任意非方尺寸。
+   *
+   * ═══ 预设与自由输入是两层，不是互相取代 ═══（ui-spec 第五节）
+   *
+   * | 层 | 尺寸 | 代价 |
+   * |---|---|---|
+   * | **预设** | 4 / 8 / 16 正方形 | 它们带**成套的标定参数**（开局库、回合上限、阈值） |
+   * | **自定义** | 长宽各自 2~16，可非方 | 参数由用户自己负责，界面会标明「未标定」 |
+   *
+   * 所以「尺寸合法」与「尺寸有预设」是两件事，判据分别是 `MIN_SIZE/MAX_SIZE`
+   * 与 `isPresetSize()`。把它们合成一条（早先的写法）会让 7×11 这类尺寸
+   * 被静默改写成 8×8 —— 用户填的值消失，而且没有任何提示。
+   */
   cols: number;
   rows: number;
   topology: Topology;
@@ -49,7 +63,17 @@ export interface DuelSettings {
    * 重开一局，**概率分布必须变化** —— 那是关卡二的验收标准之一。
    */
   turnLimit: number;
-  /** 开局 id。开局库按尺寸分级，换尺寸时它会自动落到该尺寸的第一项 */
+  /**
+   * 开局 id。开局库按尺寸分级，换尺寸时它会自动落到该尺寸的第一项。
+   *
+   * ★ **空串 = 「自定义」**，不是「还没选」。它有两个来源，而且语义相同：
+   *   - 用户手绘了开局（画完就把这一项清空）
+   *   - 尺寸不是预设（4/8/16）—— 那些尺寸**没有开局库**，只能从空棋盘开始画
+   *
+   * 用一个哨兵值而不是另加一个 `custom: boolean`：两处状态表达同一件事时，
+   * 迟早会出现「custom 为真、openingId 却指着一个真开局」这种谁也说不清的组合，
+   * 而界面上那句话究竟是哪一个说了算，得看到代码才知道。
+   */
   openingId: string;
   animations: boolean;
   /** 落子处的发光粒子 */
@@ -137,6 +161,25 @@ export interface Persisted {
 const DEFAULT_COLS = 8;
 const DEFAULT_ROWS = 8;
 
+/**
+ * 尺寸是否命中预设之一（4 / 8 / 16 正方形）。
+ *
+ * **它问的不是「尺寸合法吗」** —— 合法范围是 2~16（`MIN_SIZE`/`MAX_SIZE`），
+ * 比预设宽得多。两者的后果完全不同：不合法的尺寸要拒绝，非预设的尺寸只是
+ * 「参数未标定」。
+ */
+export function isPresetSize(cols: number, rows: number): boolean {
+  return PRESETS.some((p) => p.cols === cols && p.rows === rows);
+}
+
+/**
+ * 取某一档预设的参数（规则、开局库、默认拓扑）。
+ *
+ * ⚠ **非预设尺寸也会返回一个预设**（8×8 那档），因为规则里那些阈值总得有个值。
+ * 这是刻意的降级而不是 bug —— 但要配合 `isPresetSize()` 使用：界面必须把
+ * 「这些参数不是为这个尺寸标的」显示出来，否则用户会以为 7×11 上的胜负线
+ * 与 8×8 上的一样有依据。
+ */
 export function presetFor(cols: number, rows: number): SizePreset {
   return (
     PRESETS.find((p) => p.cols === cols && p.rows === rows) ?? (PRESETS[1] ?? PRESETS[0])
@@ -197,12 +240,23 @@ export function defaultRole(): RoleSettings {
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** 某一下标取值是否在预设里 —— 不在就回落到默认档 */
-function clampSize(cols: unknown, rows: unknown): { cols: number; rows: number } {
+function sizeInRange(v: number): boolean {
+  return Number.isFinite(v) && v >= MIN_SIZE && v <= MAX_SIZE;
+}
+
+/**
+ * 把一对尺寸读成合法值。**只卡 2~16 这一条**，不再要求它命中预设。
+ *
+ * 与 `presetFor` 分开是必要的：预设是「参数标定过的那几档」，合法范围是
+ * 「引擎算得出来的那些」。早先这里按预设卡，于是手填的 7×11 会被**静默**
+ * 换成 8×8 —— 用户填的值没了，而且不报错。
+ */
+export function clampSize(cols: unknown, rows: unknown): { cols: number; rows: number } {
   const c = Math.round(Number(cols));
   const r = Math.round(Number(rows));
-  const hit = PRESETS.find((p) => p.cols === c && p.rows === r);
-  return hit ? { cols: hit.cols, rows: hit.rows } : { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
+  return sizeInRange(c) && sizeInRange(r)
+    ? { cols: c, rows: r }
+    : { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
 }
 
 function clampTopology(v: unknown, fallback: Topology): Topology {
@@ -274,8 +328,18 @@ function clampChannel(v: unknown): ChannelId {
   return v === "noul-all" ? v : "noul-all";
 }
 
-/** 开局：id 在**该尺寸**下存在才认，否则回落到该尺寸的第一项 */
+/**
+ * 开局：id 在**该尺寸**下存在才认，否则回落到该尺寸的第一项。
+ *
+ * 两条早退，都是「自定义」这个状态的入口：
+ *   - 存的就是空串 —— 用户手绘过，或者当时选的就是「自定义」
+ *   - 尺寸不是预设 —— 非预设尺寸**没有开局库**，任何一个开局 id 在这里都
+ *     没有意义（`presetFor` 会降级返回 8×8 那档，照着它去 `build(cols, rows)`
+ *     会拿到一副形状完全不同的棋盘，甚至因结构重叠当场抛错）
+ */
 export function clampOpeningId(v: unknown, cols: number, rows: number): string {
+  if (v === "") return "";
+  if (!isPresetSize(cols, rows)) return "";
   const preset = presetFor(cols, rows);
   const hit = typeof v === "string" ? preset.openings.find((o) => o.id === v) : undefined;
   return hit?.id ?? preset.openings[0]?.id ?? "";

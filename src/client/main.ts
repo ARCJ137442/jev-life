@@ -35,6 +35,7 @@ import { resolveDecision } from "../core/decide.js";
 import type { CellProbabilities } from "../core/decide.js";
 import type { Channel } from "../core/channels.js";
 import type { Board, Cell, GameRules, Role, Termination } from "../core/types.js";
+import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
 import type { Questions } from "../shared/types.js";
 import { JevError } from "../shared/backend.js";
 import type { DecisionRequest, DecisionResult } from "../shared/backend.js";
@@ -52,9 +53,12 @@ import {
   channelOf,
   clamp01,
   clampFlipMs,
+  clampOpeningId,
   clampPace,
+  clampSize,
   clampTurnLimit,
   defaultRole,
+  isPresetSize,
   load,
   presetFor,
   save,
@@ -204,6 +208,14 @@ interface AppState {
   board: Board;
   turn: number;
   running: boolean;
+  /**
+   * 「开始对弈」是否已经被按过。
+   *
+   * 与 `turn > 0` **不是一回事**：第一回合可能因为上游报错而失败，那时
+   * `turn` 仍是 0，但这一局已经开始了 —— 棋盘该锁定。用 `turn` 兼职当这个
+   * 判据，会让「第一次调用失败之后还能继续手绘开局」这种事悄悄成立。
+   */
+  started: boolean;
   busy: boolean;
   finished: boolean;
   termination: Termination | null;
@@ -255,6 +267,7 @@ const state: AppState = {
   board: createBoard(store.duel.cols, store.duel.rows),
   turn: 0,
   running: false,
+  started: false,
   busy: false,
   finished: false,
   termination: null,
@@ -320,9 +333,17 @@ function currentRules(): GameRules {
   return { ...preset().rules, turnLimit: store.duel.turnLimit };
 }
 
-function openingOf(): Opening {
-  const p = preset();
-  return p.openings.find((o) => o.id === store.duel.openingId) ?? p.openings[0];
+/**
+ * 当前生效的开局。**null = 「自定义」**（手绘过，或该尺寸没有开局库）。
+ *
+ * 这里刻意不回落 `p.openings[0]`：回落会让「非预设尺寸」去执行一套为 8×8
+ * 设计的结构摆放，而 `compose()` 对重叠是**当场抛错**的 —— 于是选 7×11
+ * 点开一局，得到的是一句「开局有结构重叠」，而真正的原因是「这个尺寸根本
+ * 没有开局库」。
+ */
+function openingOf(): Opening | null {
+  if (store.duel.openingId === "") return null;
+  return preset().openings.find((o) => o.id === store.duel.openingId) ?? null;
 }
 
 const openingName = (o: Opening): string => (getLang() === "en" ? o.nameEn : o.nameZh);
@@ -1112,10 +1133,68 @@ function syncRunButton(): void {
     b.classList.add("primary");
   }
   b.disabled = state.finished;
+  syncDrawUi();
+}
+
+/**
+ * 现在允许手绘开局吗。
+ *
+ * 三个条件缺一不可：没结束、没开始过、还没走出过回合。
+ *
+ * ★ 这是**对局前**的布置，不是对局中的干预 —— 「v1 不做人手动落子」说的是
+ * 后者，两者语义完全不同（ui-spec 第五节）。所以判据是「这一局开始了没有」，
+ * 而不是「现在轮到谁」。
+ *
+ * `started` 与 `turn` 分开判不是冗余：第一回合可能因为上游报错而失败，
+ * 那时 `turn` 仍是 0，但这一局已经开始了。
+ */
+const canDraw = (): boolean => !state.finished && !state.started && state.turn === 0;
+
+/** 手绘与「清空棋盘」共用的可用性刷新 */
+function syncDrawUi(): void {
+  const on = canDraw();
+  $("drawHint").style.display = on ? "" : "none";
+  $<HTMLButtonElement>("bClearBoard").disabled = !on;
+}
+
+/**
+ * 画一格。
+ *
+ * 走的是 `renderer.toggle()` 而**不是** `playTurn()`：开局前还没有行动方，
+ * 所以只有缩放，既不撒粒子也不出发光选框 —— 那两个是「某个角色落子」的
+ * 视觉标记，借过来会让人以为那是某一方下的子。两个入口分开是刻意的
+ * （见 `render.ts` 里 `toggle` 的注释）。
+ */
+function drawCell(cell: Cell): void {
+  state.board = flip(state.board, cell);
+  renderer.toggle(state.board, cell);
+  markCustomOpening();
+
+  const n = aliveCount(state.board);
+  state.aliveMax = Math.max(state.aliveMax, n);
+  state.aliveMin = Math.min(state.aliveMin, n);
+
+  updateStats();
+  persist();
+}
+
+/** 清空棋盘 —— 画错了不必一格一格点回去 */
+function clearBoard(): void {
+  if (!canDraw()) return;
+  state.board = createBoard(store.duel.cols, store.duel.rows);
+  state.aliveMax = 0;
+  state.aliveMin = 0;
+  // 走的也是「自定义」那条路径：清空之后**不留**任何预设名
+  markCustomOpening();
+  renderer.setBoard(state.board);
+  updateStats();
+  persist();
+  setLed("", "status.ready");
 }
 
 function start(): void {
   if (state.running || state.finished) return;
+  state.started = true;
   state.running = true;
   syncRunButton();
   hideOverlay();
@@ -1161,9 +1240,12 @@ function newGame(): void {
   const d = store.duel;
   const opening = openingOf();
 
-  state.board = boardFromRows(opening.build(d.cols, d.rows));
+  // 没有开局 = 自定义：从空棋盘起步，等用户自己画（界面上的「清空棋盘」
+  // 与开局列表里的「自定义」走的是同一条路径）
+  state.board = opening ? boardFromRows(opening.build(d.cols, d.rows)) : createBoard(d.cols, d.rows);
   state.turn = 0;
   state.running = false;
+  state.started = false;
   state.busy = false;
   state.finished = false;
   state.termination = null;
@@ -1216,6 +1298,10 @@ function applySession(s: Session): void {
   state.aliveMin = s.aliveMin || aliveCount(state.board);
   state.finished = false;
   state.termination = null;
+  // 恢复出来的这一局「开始过了」。手绘的判据因此落到 `turn === 0` 上：
+  // 一份第 0 回合的存档（刚重开、或画到一半就刷新）仍然可以接着画，
+  // 而走出过回合的那一局无论如何都锁着
+  state.started = false;
   // 恢复出来的那一局不能自动跑起来 —— 刷新之后先让人看一眼再说
   state.running = false;
   state.busy = false;
@@ -1486,23 +1572,34 @@ function addDrawerCloseButtons(): void {
 
 /* ═══════════ 游戏抽屉（对局级）═══════════ */
 
-function renderSizeButtons(): void {
-  const host = $("sizeList");
-  host.innerHTML = PRESET_SIZES.map(
-    (s) =>
-      `<button data-size="${s.cols}" class="${s.cols === store.duel.cols && s.rows === store.duel.rows ? "on" : ""}">${s.cols}×${s.rows}</button>`,
-  ).join("");
-  for (const b of host.querySelectorAll<HTMLButtonElement>("button[data-size]")) {
-    b.onclick = () => setSize(Number(b.dataset.size));
-  }
-}
-
-/** 三档预设尺寸。**不是任意宽高** —— 每档的规则与开局库都是单独配的 */
+/**
+ * 三档预设尺寸。**不是「合法的尺寸只有这三个」** —— 合法的范围是 2~16，
+ * 由自由输入那一路承担。预设之所以只有三档，是因为只有它们带成套的标定参数。
+ */
 const PRESET_SIZES = [
   { cols: 4, rows: 4 },
   { cols: 8, rows: 8 },
   { cols: 16, rows: 16 },
 ];
+
+const inSizeRange = (v: number): boolean =>
+  Number.isInteger(v) && v >= MIN_SIZE && v <= MAX_SIZE;
+
+function renderSizeButtons(): void {
+  const host = $("sizeList");
+  const { cols, rows } = store.duel;
+  const preset = isPresetSize(cols, rows);
+  host.innerHTML = PRESET_SIZES.map(
+    (s) =>
+      `<button data-size="${s.cols}" class="${preset && s.cols === cols && s.rows === rows ? "on" : ""}">${s.cols}×${s.rows}</button>`,
+  ).join("");
+  for (const b of host.querySelectorAll<HTMLButtonElement>("button[data-size]")) {
+    b.onclick = () => {
+      const n = Number(b.dataset.size);
+      setSize(n, n);
+    };
+  }
+}
 
 /**
  * 换尺寸 = 换一局棋。
@@ -1510,38 +1607,93 @@ const PRESET_SIZES = [
  * 回合上限与开局**必须跟着回落**到新尺寸的预设值：开局库按尺寸分级，
  * 沿用旧的 id 会得到一个在新尺寸下不存在的开局；而回合上限也是每档单独给的
  * （4×4 是 30，其余是 90）。留着旧值不报错，只是那一局不是任何一档预设。
+ *
+ * 非预设尺寸没有可回落的东西：开局落到「自定义（空白棋盘）」，回合上限保持
+ * 用户当前的值 —— 界面会同时标明这个尺寸的参数未标定（`game.sizeUncalibrated`）。
  */
-function setSize(cols: number): void {
-  const hit = PRESET_SIZES.find((s) => s.cols === cols);
-  if (!hit) return;
-  const p = presetFor(hit.cols, hit.rows);
-  store.duel.cols = hit.cols;
-  store.duel.rows = hit.rows;
-  store.duel.turnLimit = p.rules.turnLimit;
-  store.duel.openingId = p.openings[0]?.id ?? "";
+function setSize(cols: number, rows: number): void {
+  if (!inSizeRange(cols) || !inSizeRange(rows)) return;
+  store.duel.cols = cols;
+  store.duel.rows = rows;
+  if (isPresetSize(cols, rows)) {
+    const p = presetFor(cols, rows);
+    store.duel.turnLimit = p.rules.turnLimit;
+    store.duel.openingId = p.openings[0]?.id ?? "";
+  } else {
+    store.duel.openingId = "";
+  }
   save(store);
   syncGameUi();
   newGame();
 }
 
-/** 开局选择器：用 monospace 字符网格画出形状，不只是文字名称 */
+/**
+ * 把开局选择标成「自定义」—— 手绘与清空棋盘共用这一处。
+ *
+ * 不这么做的话，界面会一直显示着某个预设名（比如 `block-glider`），
+ * 而棋盘上是用户自己画的东西 —— 那是界面在**说谎**，而这类谎话没有任何
+ * 报错会露出来。
+ */
+function markCustomOpening(): void {
+  if (store.duel.openingId === "") return;
+  store.duel.openingId = "";
+  save(store);
+  renderOpenings();
+}
+
+/**
+ * 自定义那一项的缩略图 —— 一个空格阵，一眼看出「这里什么都没有」。
+ *
+ * 刻意写成三段字符串拼接而**不是** `[".", ".", "."]` 这种数组字面量：
+ * `tools/check-dom.ts` 会把方括号包裹的字符串字面量一律当成 DOM id 清单
+ * （它扫的是全文），多一个方括号数组就多一次「这个 id 不存在」的误报机会。
+ */
+const BLANK_THUMB = "···\n···\n···";
+
+/**
+ * 开局选择器：用 monospace 字符网格画出形状，不只是文字名称。
+ *
+ * ★ 「自定义」是列表里**常驻的一项**，不是预设之外的补救措施：
+ *   - 手绘过之后，选中的那一项要变成它（否则界面谎称这局用的是某个预设）
+ *   - 非预设尺寸下，它是**唯一**的一项（那些尺寸没有开局库）
+ *   - 它同时就是「清空棋盘」：点它 = 空棋盘 + 清掉预设标记
+ *
+ * `data-opening=""` 是那个哨兵值本身，空串在 `dataset` 里读出来是 `""`
+ * 而不是 `undefined`，所以 `?? 旧值` 这个兜底不会把它吞掉 —— 这一点是刻意的，
+ * 也是这里唯一一处用空串而不是缺省来表达「自定义」的地方。
+ */
 function renderOpenings(): void {
   const host = $("openingList");
-  host.innerHTML = preset()
-    .openings.map((o) => {
-      const on = o.id === store.duel.openingId ? " on" : "";
-      const thumb = o.preview
-        .map((row) => escapeHtml(row.replace(/#/g, "■").replace(/\./g, "·")))
-        .join("\n");
-      return `<button class="opening${on}" data-opening="${escapeHtml(o.id)}">
-        <pre class="thumb">${thumb}</pre>
-        <span class="obody">
-          <span class="oname">${escapeHtml(openingName(o))}</span>
-          <span class="onote">${escapeHtml(o.note)}</span>
-        </span>
-      </button>`;
-    })
-    .join("");
+  const custom = store.duel.openingId === "";
+
+  const builtin = isPresetSize(store.duel.cols, store.duel.rows)
+    ? preset()
+        .openings.map((o) => {
+          const on = o.id === store.duel.openingId ? " on" : "";
+          const thumb = o.preview
+            .map((row) => escapeHtml(row.replace(/#/g, "■").replace(/\./g, "·")))
+            .join("\n");
+          return `<button class="opening${on}" data-opening="${escapeHtml(o.id)}">
+            <pre class="thumb">${thumb}</pre>
+            <span class="obody">
+              <span class="oname">${escapeHtml(openingName(o))}</span>
+              <span class="onote">${escapeHtml(o.note)}</span>
+            </span>
+          </button>`;
+        })
+        .join("")
+    : `<div class="desc">${escapeHtml(t("game.noOpeningLib"))}</div>`;
+
+  const customBtn = `<button class="opening${custom ? " on" : ""}" data-opening="">
+    <pre class="thumb">${BLANK_THUMB}</pre>
+    <span class="obody">
+      <span class="oname">${escapeHtml(t("game.customOpening"))}</span>
+      <span class="onote">${escapeHtml(t("game.customOpeningNote"))}</span>
+    </span>
+  </button>`;
+
+  host.innerHTML = builtin + customBtn;
+
   for (const b of host.querySelectorAll<HTMLButtonElement>("button[data-opening]")) {
     b.onclick = () => {
       store.duel.openingId = b.dataset.opening ?? store.duel.openingId;
@@ -1556,10 +1708,27 @@ function syncGameUi(): void {
   renderSizeButtons();
   renderOpenings();
 
+  $<HTMLInputElement>("inpCols").value = String(store.duel.cols);
+  $<HTMLInputElement>("inpRows").value = String(store.duel.rows);
   $<HTMLSelectElement>("inpTopology").value = store.duel.topology;
   $<HTMLInputElement>("inpTurnLimit").value = String(store.duel.turnLimit);
   $<HTMLInputElement>("inpAnim").checked = store.duel.animations;
   $<HTMLInputElement>("inpParticles").checked = store.duel.particles;
+
+  // ★ 「该尺寸的参数未标定」。它是**预设与自由输入分两层**这件事的另一半 ——
+  // 只做自由输入而不说这句，用户会以为 7×11 上的胜负线与 8×8 上的一样有依据
+  const customSize = !isPresetSize(store.duel.cols, store.duel.rows);
+  const sizeNote = $("sizeNote");
+  sizeNote.textContent = customSize ? t("game.sizeUncalibrated") : "";
+  sizeNote.style.display = customSize ? "" : "none";
+
+  // 环绕 + 极小尺寸：引擎算得出来（见 core/types.ts 的 MIN_SIZE 注释），
+  // 但邻居会被重复计数，没有对应的几何直觉 —— 说清楚，而不是默默算一个
+  // 别人看不懂的结果
+  const tinyTorus =
+    store.duel.topology === "torus" &&
+    (store.duel.cols <= 3 || store.duel.rows <= 3);
+  $("topoWarn").style.display = tinyTorus ? "block" : "none";
 
   const rules = currentRules();
   $("rulesNote").textContent =
@@ -1623,6 +1792,26 @@ function bindGameSettings(): void {
   $("inpTurnLimit").addEventListener("change", () => {
     if (validateTurnLimit()) applyDuelSettings(true);
   });
+
+  // 自由尺寸：长与宽各自 2~16，两个框都改完（change 在失焦 / 回车时触发）才重开一局。
+  // 越界的值由 `clampSize` 拨回合法范围，而 `syncGameUi()` 会把结果写回输入框 ——
+  // 用户看得见自己填的值被改成了什么，不做静默夹取
+  const applySizeInputs = (): void => {
+    const next = clampSize(
+      $<HTMLInputElement>("inpCols").value,
+      $<HTMLInputElement>("inpRows").value,
+    );
+    // 值没变就**不重开**：在抽屉里按 Tab 路过这两个框、或者把 7 改成 7，
+    // 都不该把手上画了一半的开局清掉。只把显示拨回当前值
+    if (next.cols === store.duel.cols && next.rows === store.duel.rows) {
+      syncGameUi();
+      return;
+    }
+    setSize(next.cols, next.rows);
+  };
+  for (const id of ["inpCols", "inpRows"]) {
+    $(id).addEventListener("change", applySizeInputs);
+  }
   $("inpTopology").addEventListener("change", () => applyDuelSettings(true));
   // 纯画面：改了不重开
   for (const id of ["inpAnim", "inpParticles"]) {
@@ -1645,7 +1834,8 @@ function resetDuelSettings(): void {
   const p = presetFor(store.duel.cols, store.duel.rows);
   store.duel.topology = p.defaultTopology;
   store.duel.turnLimit = p.rules.turnLimit;
-  store.duel.openingId = p.openings[0]?.id ?? "";
+  // 自定义尺寸没有开局库，恢复默认同样落到「自定义」而不是某个 8×8 的开局
+  store.duel.openingId = clampOpeningId(p.openings[0]?.id ?? "", store.duel.cols, store.duel.rows);
   store.duel.animations = true;
   store.duel.particles = true;
   store.duel.paceMs = 1200;
@@ -2023,14 +2213,17 @@ function applyImported(text: string, expect: ArchiveKind): void {
     if (r.duel) {
       // 规范化走的是与「本地已有配置」完全相同的那条路径（clamp*），
       // 不会出现「导入更宽松」这种只有一条入口才有的漏洞
-      const hit = presetFor(r.duel.cols, r.duel.rows);
+      // 尺寸只卡 2~16，**不往预设上凑** —— 导入一份 7×11 的对局档，
+      // 得到的应当还是 7×11，而不是一份静默变成 8×8 的设置
+      const size = clampSize(r.duel.cols, r.duel.rows);
+      const hit = presetFor(size.cols, size.rows);
       store.duel = {
         ...store.duel,
-        cols: hit.cols,
-        rows: hit.rows,
+        cols: size.cols,
+        rows: size.rows,
         topology: r.duel.topology === "torus" ? "torus" : hit.defaultTopology,
         turnLimit: clampTurnLimit(r.duel.turnLimit, hit.rules.turnLimit),
-        openingId: hit.openings.find((o) => o.id === r.duel?.openingId)?.id ?? hit.openings[0]?.id ?? "",
+        openingId: clampOpeningId(r.duel.openingId, size.cols, size.rows),
         animations: r.duel.animations !== false,
         particles: r.duel.particles !== false,
         paceMs: clampPace(r.duel.paceMs),
@@ -2274,6 +2467,16 @@ function bindIncompatibleModal(): void {
 
 function bindControls(): void {
   $("bToggle").onclick = toggleRun;
+
+  // 手绘开局：点格子即翻转。绑定在**画布**上而不是某一层覆盖元素上 ——
+  // 格号由一个来源（渲染器的几何）现算，见 `BoardRenderer.cellAtPoint`
+  boardCanvas.addEventListener("click", (e) => {
+    if (!canDraw()) return;
+    const cell = renderer.cellAtPoint(e.clientX, e.clientY);
+    if (cell !== null) drawCell(cell);
+  });
+  $("bClearBoard").onclick = clearBoard;
+
   $("bStep").onclick = () => {
     pause();
     void doTurn();
@@ -2403,10 +2606,11 @@ function boot(): void {
     "board", "chart", "chartBox", "momentum", "momentumBox", "heat", "heatBox",
     "led", "status", "cost", "avgCost", "lat", "backend",
     "sAlive", "sRatio", "sTurn", "sMax", "sMin", "decision", "dTurn",
-    "bToggle", "bStep", "bNew", "bResult", "pace", "paceVal",
+    "bToggle", "bStep", "bNew", "bClearBoard", "drawHint", "bResult", "pace", "paceVal",
     "bLang", "langLbl", "bGame", "bStrategy", "bApi", "bLog", "bArchive",
     "scrim", "dGame", "dStrategy", "dApi", "dLog", "dArchive", "toast", "fileInput",
-    "sizeList", "inpTopology", "inpTurnLimit", "turnLimitWarn", "rulesNote",
+    "sizeList", "inpCols", "inpRows", "sizeNote", "inpTopology", "topoWarn",
+    "inpTurnLimit", "turnLimitWarn", "rulesNote",
     "openingList", "inpAnim", "inpParticles", "inpFlipMs", "flipMsVal", "bGameReset", "bGameDone",
     "roleHint", "ruleNote", "hintText", "inpPredict", "inpDetect",
     "inpMemory", "memoryVal", "bMemMax", "inpStrategy", "thresholdRow",

@@ -71,7 +71,28 @@ export function fakeCanvas(): { canvas: HTMLCanvasElement; ctx: FakeCtx } {
     },
     createLinearGradient: () => ({ addColorStop: () => {} }),
   };
-  const el = { width: 0, height: 0, style: {}, getContext: () => ctx };
+  // `getBoundingClientRect` 按 CSS 尺寸回一个「贴在视口左上角」的矩形 ——
+  // `cellAtPoint` 靠它把视口坐标换算回内部几何。无头环境里没有真实布局，
+  // 所以这里让矩形就等于渲染器自己写进 style 的宽高：这样「点哪儿是哪格」
+  // 才有一个确定的答案可断言。
+  const style: Record<string, string> = {};
+  const el = {
+    width: 0,
+    height: 0,
+    style,
+    getContext: () => ctx,
+    getBoundingClientRect: () => ({
+      left: 0,
+      top: 0,
+      right: parseFloat(style.width) || 0,
+      bottom: parseFloat(style.height) || 0,
+      width: parseFloat(style.width) || 0,
+      height: parseFloat(style.height) || 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }),
+  };
   return { canvas: el as unknown as HTMLCanvasElement, ctx };
 }
 

@@ -431,9 +431,13 @@ textarea{resize:vertical}
       <button class="primary" id="bToggle" data-i18n-title="ctrl.takeoverTitle" data-i18n="ctrl.takeover">▶ 开始对弈</button>
       <button id="bStep" data-i18n-title="ctrl.stepTitle" data-i18n="ctrl.step">单步</button>
       <button id="bNew" class="ghost" data-i18n-title="ctrl.newTitle" data-i18n="ctrl.new">↺ 重开</button>
+      <!-- 手绘入口：只在「还没开始对弈」时可用。它是**对局前**的布置，
+           与「v1 不做人手动落子」（对局中的干预）不冲突 -->
+      <button id="bClearBoard" class="ghost" data-i18n-title="ctrl.clearBoardTitle" data-i18n="ctrl.clearBoard">清空棋盘</button>
       <button id="bResult" class="ghost" disabled data-i18n-title="ctrl.resultTitle" data-i18n="ctrl.result">终局</button>
       <span class="hint"><kbd>Space</kbd> <span data-i18n="ctrl.hint">暂停</span></span>
     </div>
+    <div class="desc" id="drawHint" data-i18n="ctrl.drawHint" style="display:none;text-align:center;margin-top:7px"></div>
 
     <div class="pace">
       <span class="lbl" data-i18n="pace.label">步进间隔</span>
@@ -582,10 +586,22 @@ textarea{resize:vertical}
       <span data-i18n="game.noteInput">与 2048 相反：生命棋的规则不自明，所以这里的每一项都会写进发给 Jev 的 state —— 改完之后概率分布**应当**变化；若没变，那才是 bug。</span>
     </div>
 
+    <!-- ★ 预设与自由输入是**两层**，不是互相取代（ui-spec 第五节）。
+         预设那三档带成套的标定参数（开局库 / 回合上限 / 阈值）；
+         自由输入给「我想试试这个尺寸」用，参数由用户自己负责 —— 所以下面
+         那个 #sizeNote 必须把「未标定」照实说出来，否则用户会以为 7×11 上
+         的胜负线与 8×8 上的一样有依据。 -->
     <div class="field">
       <label data-i18n="game.boardSize">棋盘尺寸</label>
       <div class="desc" data-i18n="game.sizeHint"></div>
       <div class="presets" id="sizeList"></div>
+      <div class="slider-row" style="margin-top:10px">
+        <span class="tinylbl" style="margin:0" data-i18n="game.customSize">自定义</span>
+        <input type="number" class="numin" id="inpCols" min="2" max="16" step="1" data-i18n-title="game.colsTitle">
+        <span class="tinylbl" style="margin:0">×</span>
+        <input type="number" class="numin" id="inpRows" min="2" max="16" step="1" data-i18n-title="game.rowsTitle">
+      </div>
+      <div class="desc" id="sizeNote" style="margin-top:9px;margin-bottom:0"></div>
     </div>
 
     <div class="field">
@@ -594,6 +610,7 @@ textarea{resize:vertical}
         <option value="bounded" data-i18n="game.topoBounded">有界</option>
         <option value="torus" data-i18n="game.topoTorus">环绕</option>
       </select>
+      <div class="warnline" id="topoWarn" data-i18n="game.torusTiny"></div>
     </div>
 
     <div class="field">

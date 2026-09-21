@@ -86,6 +86,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "ctrl.stepTitle": "只走一个回合（双方同时落子，再演化一代）",
     "ctrl.new": "↺ 重开",
     "ctrl.newTitle": "重开一局，保留全部设置",
+    "ctrl.clearBoard": "清空棋盘",
+    "ctrl.clearBoardTitle": "把棋盘擦成空的，重新画（只在开始对弈之前可用）",
+    "ctrl.drawHint": "开始对弈之前，点格子即可摆放开局（只有缩放反馈，没有粒子与选框 —— 那时还没有行动方）。开始之后棋盘锁定。",
     "ctrl.result": "终局",
     "ctrl.resultTitle": "重新打开终局结果",
     "ctrl.hint": "暂停",
@@ -127,7 +130,15 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.desc":
       "这些是**对局级**设置：两边不同就不是同一个游戏。注意生命棋与 2048 相反 —— 规则不自明，所以这里改任何东西都会进入 Jev 的输入，概率分布应当随之变化。",
     "game.boardSize": "棋盘尺寸",
-    "game.sizeHint": "只有三档预设尺寸，每档的规则与开局库都是单独配的 —— 固定格数的开局换个尺寸就从「离死之执很远」变成「贴着线」。",
+    "game.sizeHint":
+      "三档预设各带一整套标定过的参数（规则、回合上限、开局库）；下面是自由尺寸 —— 长与宽各自 2~16，想试别的尺寸时用。",
+    "game.customSize": "自定义",
+    "game.colsTitle": "棋盘宽度（列数），2~16",
+    "game.rowsTitle": "棋盘高度（行数），2~16",
+    "game.sizeUncalibrated":
+      "⚠ 该尺寸的参数未标定：回合上限与胜负线是为 4/8/16 调的，套到这个尺寸上没有任何依据。该尺寸也没有开局库，只能自己画。",
+    "game.torusTiny":
+      "⚠ 环绕拓扑 + 极小尺寸（2~3）：能算，但 rows = 2 时 r−1 与 r+1 是同一行，同一个格子会被重复计数 —— 结果是确定的，只是没有对应的几何直觉。",
     "game.topology": "边界拓扑",
     "game.topoBounded": "有界 — 棋盘之外算死格，边界是墙",
     "game.topoTorus": "环绕 — 上下边相连、左右边相连，没有墙",
@@ -147,6 +158,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.flipMsHint": "落子动画、粒子与选框的存续时间；演化一代在它之后才开始。",
     "game.opening": "开局",
     "game.openingHint": "开局库按尺寸分级 —— 先定尺寸，再选开局。改动能立即重开一局。",
+    "game.customOpening": "自定义（空白棋盘）",
+    "game.customOpeningNote":
+      "空棋盘起步，自己画。开始对弈之前点格子即翻转；画过之后这里会一直标着「自定义」，不会谎称这局用的是某个预设。",
+    "game.noOpeningLib": "该尺寸不是预设，没有开局库 —— 请从空白棋盘自己画。",
     "game.reset": "恢复默认",
     "game.resetTitle": "尺寸、拓扑、终局规则、开局、动效回到出厂值",
     "game.done": "完成",
@@ -482,6 +497,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "ctrl.stepTitle": "Play a single turn (both sides flip, then one evolution)",
     "ctrl.new": "↺ Restart",
     "ctrl.newTitle": "Start a fresh game, keeping every setting",
+    "ctrl.clearBoard": "Clear board",
+    "ctrl.clearBoardTitle": "Wipe the board and start drawing again (only before the duel starts)",
+    "ctrl.drawHint": "Before the duel starts, click cells to set up the opening (scale feedback only — no particles, no ring: there is no acting side yet). Once it starts, the board is locked.",
     "ctrl.result": "Result",
     "ctrl.resultTitle": "Reopen the end-of-game result",
     "ctrl.hint": "pause",
@@ -523,7 +541,15 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.desc":
       "These are game-level settings: if the two sides disagreed on them it would not be the same game. Note that Life Chess is the opposite of 2048 — the rules are not self-evident, so anything changed here enters Jev's input and the distribution should change.",
     "game.boardSize": "Board size",
-    "game.sizeHint": "Only three preset sizes; the rules and opening library are calibrated per size — an opening with a fixed cell count goes from “far from the Death threshold” to “right on it” when the board changes.",
+    "game.sizeHint":
+      "The three presets each come with a calibrated set of parameters (rules, turn limit, opening library). Below them are free sizes — length and width are each 2–16, for when you want to try another size.",
+    "game.customSize": "Custom",
+    "game.colsTitle": "Board width (columns), 2–16",
+    "game.rowsTitle": "Board height (rows), 2–16",
+    "game.sizeUncalibrated":
+      "⚠ This size is uncalibrated: the turn limit and win lines were tuned for 4/8/16 and there is no basis for them at this size. There is no opening library either — draw your own.",
+    "game.torusTiny":
+      "⚠ Torus topology at a tiny size (2–3): it computes, but with rows = 2 the row r−1 and the row r+1 are the same row, so a cell's neighbours are counted more than once — the result is well defined, it just has no matching geometric intuition.",
     "game.topology": "Boundary topology",
     "game.topoBounded": "Bounded — outside the board counts as dead; the edge is a wall",
     "game.topoTorus": "Torus — top wraps to bottom, left to right; no walls",
@@ -543,6 +569,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.flipMsHint": "Lifetime of the flip animation, particles and ring; the evolution starts after it.",
     "game.opening": "Opening",
     "game.openingHint": "The opening library is per size — pick the size first, then the opening. Changing it restarts the game immediately.",
+    "game.customOpening": "Custom (empty board)",
+    "game.customOpeningNote":
+      "Start from an empty board and draw your own. Before the duel starts a click flips a cell; once you have drawn, this entry stays marked “custom” instead of claiming the game uses some preset.",
+    "game.noOpeningLib": "This size is not a preset, so there is no opening library — draw your own from an empty board.",
     "game.reset": "Reset to defaults",
     "game.resetTitle": "Size, topology, end rules, opening and effects go back to factory values",
     "game.done": "Done",
