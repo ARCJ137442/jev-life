@@ -27,9 +27,9 @@
  * 所以这里宁可炸。缺键、多键、没有概率字段、概率越界、格子对该角色非法 ——
  * 全部当场抛错，并且**点名是哪一题、为什么**。
  */
-import { legalCells } from "./life.js";
+import { actionCells } from "./life.js";
 import type { CellProbabilities } from "./decide.js";
-import type { Board, Cell, Role } from "./types.js";
+import type { Board, Cell, Mode, Role } from "./types.js";
 import type { Answer, BooleanAnswer } from "../shared/types.js";
 
 /* ══════════════════════════════════════════════════════════════════
@@ -124,9 +124,13 @@ function probabilityOf(key: string, a: Answer): number {
 /**
  * 把一条通道的回包统一解析成「每格一个概率」。
  *
- * `board` 与 `role` 必须与**组题时用的是同一副**：合法集决定题面，题面决定
- * 回包里该有哪些键。对不上就抛错（「多出来的键」和「缺了的键」都会被抓到），
- * 而不是让一份错位的分布悄悄流进决策层。
+ * `board` / `role` / `mode` 必须与**组题时用的是同一组**：三者一起决定合法集，
+ * 合法集决定题面，题面决定回包里该有哪些键。对不上就抛错（「多出来的键」和
+ * 「缺了的键」都会被抓到），而不是让一份错位的分布悄悄流进决策层。
+ *
+ * ⚠ `mode` 是**必填**的，理由与 `resolveDecision` 那一处相同：单人局里
+ * 行动方生死一体、合法集是全部格子，漏传（或用默认值）会让单人局按双人
+ * 的题面去解析，于是 64 个键里有一半被判成「多出来的」。
  *
  * 返回的 Map 按**格号升序**，与回包里键的书写顺序无关 ——
  * 测量要求「同一个分布 ⟹ 同一个落子」，而落子顺序会影响同概率时的取舍。
@@ -136,6 +140,7 @@ export function parseAnswers(
   answers: Record<string, Answer>,
   board: Board,
   role: Role,
+  mode: Mode,
 ): CellProbabilities {
   if (channel.kind !== IMPLEMENTED) {
     throw new Error(
@@ -144,7 +149,7 @@ export function parseAnswers(
     );
   }
 
-  const legal = legalCells(board, role);
+  const legal = actionCells(board, role, mode);
   if (legal.length === 0) {
     throw new Error(
       `${

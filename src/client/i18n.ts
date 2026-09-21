@@ -250,7 +250,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     // 所以措辞取模式无关的说法。写「生之执 / 死之执」会在单人局里指错人，
     // 而这条提示本来就该在两套规则下读得通
     "tpl.why.direction": "方向词（尽可能多 / 尽可能少）—— 反向的那一边必须显式写出来，写反了测到的是模型的直觉，不是它对规则的理解",
-    "tpl.why.flipAbility": "模型据此知道自己这一手能翻的是哪种格子",
+    "tpl.why.flipAbility": "模型据此知道自己这一手能翻哪些格子（单人局里是全部格子，两种都能翻）",
     "tpl.why.attitude": "「让细胞活着对你有（不）利」—— 少了这句就只剩一个角色名，模型会按「让细胞活着」的直觉答",
     "tpl.why.objectiveMine": "结算方向：累计净增长对你是越大越好还是越小越好",
     "tpl.why.mode": "这一局是双人对弈还是单人",
@@ -790,7 +790,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "tpl.why.role": "how the model knows which side it is on",
     "tpl.why.codename": "how the model knows whether it plays Life or Death",
     "tpl.why.direction": "the direction word (as large / as small as possible) — whichever side is reversed must be spelled out, or what gets measured is the model's instinct rather than its reading of the rules",
-    "tpl.why.flipAbility": "which kind of cell the model may flip",
+    "tpl.why.flipAbility": "which cells the model may flip (all of them in a solo game — both directions)",
     "tpl.why.attitude": "“keeping cells alive is (dis)advantageous to you” — without it the role is just a name and the model answers on the “keep cells alive” instinct",
     "tpl.why.objectiveMine": "which direction the score settles in for this player",
     "tpl.why.mode": "whether this is a duel or a solo game",

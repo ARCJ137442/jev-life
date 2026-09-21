@@ -147,12 +147,24 @@ const roleName = (role: Role): string => (role === "life" ? "生之执" : "死�
  * 不是它对规则的理解。所以死之执那一份要主动否定直觉（「让细胞活着对你不利」），
  * 生之执给对称的正向表述。测试锁的是**方向词**，不是角色名。
  */
-function roleDirection(role: Role): { codename: string; direction: string; flipAbility: string; attitude: string } {
+function roleDirection(
+  role: Role,
+  solo: boolean,
+): { codename: string; direction: string; flipAbility: string; attitude: string } {
   if (role === "life") {
     return {
-      codename: "Life",
+      // ★ 单人局里行动方**生死一体**，名字不能是 "Life"：默认模板那句是
+      // `{{role}}：你是 {{codename}}`，于是它会读成「**玩家：你是 Life**」——
+      // 与「两种格子都能翻」直接矛盾，而模型会据此按「只管让细胞活下来」
+      // 的策略走。这是全篇唯一一处「不只改能力描述」的地方，用户已确认
+      codename: solo ? "Player" : "Life",
+      // 方向与态度**不动**（用户 2026-09-21 定：方向不变，只改能力描述）——
+      // 目标仍是让活细胞尽可能多
       direction: "大 —— 也就是让棋盘上的活细胞尽可能多",
-      flipAbility: "你每回合可以翻转一个死格为活。",
+      // ★ 能力描述必须跟着合法集走：`actionCells` 在单人局给的是**全部格子**
+      flipAbility: solo
+        ? "你每回合可以翻转任意一格 —— 死格翻成活、活格翻成死。"
+        : "你每回合可以翻转一个死格为活。",
       attitude: "有利",
     };
   }
@@ -296,7 +308,7 @@ export function templateVars(i: TemplateInput): Record<string, string> {
   const actorName = solo ? "玩家" : roleName(role);
 
   return {
-    ...roleDirection(role),
+    ...roleDirection(role, solo),
     role: actorName,
     objectiveMine: solo
       ? "你是玩家：累计净增长越大越好 —— 终局时结算的就是它。"

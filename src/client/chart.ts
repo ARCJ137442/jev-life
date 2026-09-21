@@ -21,7 +21,7 @@
  * 直接当像素尺寸用。这是源仓库踩出来的：不夹 DPR 时 4K 屏上一次 resize 会
  * 分配 8000×8000 的位图，滚动肉眼可见地卡。
  */
-import type { Board, Cell, Role } from "../core/types.js";
+import type { Board, Cell, Mode, Role } from "../core/types.js";
 import { t } from "./i18n.js";
 
 /**
@@ -49,12 +49,20 @@ const PAD_B = 12;
 export const MAX_DPR = 2.5;
 
 /**
- * 交集区的填色（规格里的「黄」）。
+ * 「中段 / 合并」的黄。**它是图表语义，不是角色色** —— 绿与红回答的是
+ * 「这是**谁**」，而黄回答的是「这里只有一件事，或者两件事叠在一起」。
+ * 所以它不跟着 `ROLE_META` 走。与 CSS 的 `--yellow` 同色。
  *
- * 它是**图表语义**而不是角色色，所以不跟着 `ROLE_META` 走 —— 绿/红是「谁」，
- * 黄是「两个人都在这里」，它与 CSS 的 `--yellow` 是同一个色。
+ * 两处在用：
+ *   1. 交集区的填色（下面 `OVERLAP_FILL`，同一个色的半透明版）
+ *   2. **单人局的置信度带** —— 那里只有一个行动方，而它既不是「生」也不是
+ *      「死」（生死一体），用绿或红都是在指一个不存在的人
  */
-const OVERLAP_FILL = "rgba(251,191,36,.42)";
+export const CHART_YELLOW = "#fbbf24";
+
+/** 交集区的填色。**由 `CHART_YELLOW` 派生**，不另写一份色值 —— 两处各写一份
+ *  的话，改了其中一处就会得到「图例是黄、交集带是另一个黄」而没人查得出来 */
+const OVERLAP_FILL = withAlpha(CHART_YELLOW, 0.42);
 
 /** 把 `#rrggbb` 变成等价的 `rgba()`。热力图靠它把「概率」压进不透明度 */
 export function withAlpha(hex: string, alpha: number): string {
@@ -727,16 +735,24 @@ export interface HeatData {
  * 归一化用**全局最大值**而不是固定刻度：Jev 的绝对概率常常在 0.01 量级，
  * 按绝对刻度画出来是一张全黑的图，那等于没画。
  */
-export function buildHeat(board: Board, probs: RoleProbs): HeatData {
+export function buildHeat(board: Board, probs: RoleProbs, mode: Mode): HeatData {
   const n = board.cells.length;
   const values = new Float32Array(n);
   const roles = new Uint8Array(n);
   let peak = 0;
 
   for (let i = 0; i < n; i++) {
+    // **颜色**仍然按格子当前生死取（死格→绿、活格→红）—— 那是「这一手会把
+    // 它变成什么」。单人局与双人局在这件事上完全一致，一行都不用改。
     const role: Role = board.cells[i] ? "death" : "life";
     roles[i] = board.cells[i] ? HEAT_ROLE_DEATH : HEAT_ROLE_LIFE;
-    const p = probs[role]?.get(i) ?? 0;
+    // **查哪张表**则随模式变：双人局里两种格子分属两条通道（各自一半），
+    // 单人局里行动方生死一体、只有**一个**分布盖住全部格子。
+    //
+    // ⚠ 这一处漏了模式的症状是**安静**的：活格去查 `probs.death`（null）
+    // 取回一片 0，热力图右半边整块是黑的 —— 而图本身「画出来了」，
+    // 看起来只像「模型对活格没想法」。
+    const p = (mode === "solo" ? probs.life : probs[role])?.get(i) ?? 0;
     values[i] = p;
     if (p > peak) peak = p;
   }

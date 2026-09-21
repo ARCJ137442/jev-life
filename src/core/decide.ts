@@ -34,8 +34,8 @@
  *     无合法格 ⟺ 终局判定本该已经结束对局（见 `context.ts` 的 `buildNoulAll`），
  *     返回一个不存在的落点会把「不该发生的事」变成一个安静的错误答案。
  */
-import { legalCells } from "./life.js";
-import type { Board, Cell, Role } from "./types.js";
+import { actionCells } from "./life.js";
+import type { Board, Cell, Mode, Role } from "./types.js";
 
 export type Strategy = "greedy" | "sample" | "threshold";
 
@@ -99,8 +99,12 @@ function percent(p: number): string {
 
 /**
  * @param probabilities Jev 给出的「每格一个概率」
- * @param board         当前棋盘 —— 合法集由它和角色现算（见文件头第 2 条）
+ * @param board         当前棋盘 —— 合法集由它、角色与模式现算（见文件头第 2 条）
  * @param role          这一手是谁下的
+ * @param mode          对局模式。**必填**：单人局里行动方生死一体，合法集是
+ *                      **全部格子**而不是「按角色取的那一半」。给默认值会让
+ *                      「单人局按双人规则判」安静地发生 —— 症状是选出来的落点
+ *                      与题面对不上，而报错会出现在很远的地方（或者不报错）
  * @param strategy      贪心 / 概率采样 / 置信度门槛
  * @param threshold     置信度门槛（仅 threshold 策略使用，0 = 不启用）
  * @param rand          采样用的随机源。**可注入**（见文件头），默认 `Math.random`
@@ -109,11 +113,12 @@ export function resolveDecision(
   probabilities: CellProbabilities,
   board: Board,
   role: Role,
+  mode: Mode,
   strategy: Strategy,
   threshold: number,
   rand: () => number = Math.random,
 ): Resolution {
-  const legal = legalCells(board, role);
+  const legal = actionCells(board, role, mode);
   if (legal.length === 0) {
     throw new Error(
       `${

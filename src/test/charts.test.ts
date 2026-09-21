@@ -317,6 +317,39 @@ test("差分：态势图的越界计数与 classifyTermination 的防抖判定�
   assert.ok(deathCases >= 5, `触发过死之执胜负线的样本太少：${deathCases}`);
 });
 
+/* ═══════════ ③ 决策热力图：单人局的生死一体 ═══════════ */
+
+test("★ 单人局：一个分布盖住**全部**格子，热力图不能有半张是黑的", () => {
+  // 生死一体之后行动方两种格子都能翻，所以它给**每一格**一个概率，
+  // 而这些值全在 `probs.life` 里（单人局没有 `probs.death` 这条通道）。
+  // 照双人的规则去查（活格查 death）会取回一片 0 —— 而图**还是画出来了**，
+  // 看起来只像「模型对活格没想法」，不像坏掉
+  const board = HEAT_BOARD;
+  const life = new Map<number, number>();
+  for (let i = 0; i < board.cells.length; i++) life.set(i, 0.5);
+  const probs = { life, death: null };
+
+  const solo = buildHeat(board, probs, "solo");
+  assert.ok(solo.peak > 0, "单人局的全局峰值不该是 0");
+  for (let i = 0; i < board.cells.length; i++) {
+    assert.ok(solo.values[i] > 0, `单人局第 ${i} 格没有值 —— 那一半格子被查成了 0`);
+  }
+
+  // 反证：同一份输入按**双人**模式解，活格那一半必然全是 0。
+  // 没有这一条，上面那圈断言在「模式参数被忽略」的实现下也会通过
+  const duel = buildHeat(board, probs, "duel");
+  for (let i = 0; i < board.cells.length; i++) {
+    if (board.cells[i]) assert.equal(duel.values[i], 0, "双人局里活格不该查到 life 那张表");
+    else assert.ok(duel.values[i] > 0, "双人局里死格本来就该有值");
+  }
+
+  // ★ 两模式**取色规则相同**：一律按格子当前生死（死格→绿、活格→红）——
+  // 那是「这一手会把它变成什么」，与谁在看无关。不同的只是查哪张表
+  for (let i = 0; i < board.cells.length; i++) {
+    assert.equal(solo.roles[i], board.cells[i] ? HEAT_ROLE_DEATH : HEAT_ROLE_LIFE);
+  }
+});
+
 /* ═══════════ ③ 决策热力图 ═══════════ */
 
 /** 一副生死各半的 4×4，用来核对「每格恰好属于一个角色」 */
@@ -333,7 +366,7 @@ test("buildHeat：每一格都有值，且恰好被一个角色认领", () => {
     else life.set(i, 0.01 * (i + 1));
   }
 
-  const heat = buildHeat(HEAT_BOARD, { life, death });
+  const heat = buildHeat(HEAT_BOARD, { life, death }, "duel");
   assert.equal(heat.values.length, cells);
   assert.equal(heat.roles.length, cells);
 
@@ -366,7 +399,7 @@ test("★ buildHeat 必须按**决策当时**那副棋盘取：换一副棋盘�
   }
   const probs = { life, death };
 
-  const correct = buildHeat(HEAT_BOARD, probs);
+  const correct = buildHeat(HEAT_BOARD, probs, "duel");
   assert.equal(
     [...correct.values].filter((v) => v === 0).length,
     0,
@@ -375,7 +408,7 @@ test("★ buildHeat 必须按**决策当时**那副棋盘取：换一副棋盘�
 
   // 换一副棋盘（这里用演化后的那一副）同一个候选格就查不到了
   const evolved = boardFromRows(["##..", ".##.", "...#", "###."]);
-  const wrong = buildHeat(evolved, probs);
+  const wrong = buildHeat(evolved, probs, "duel");
   assert.ok(
     [...wrong.values].some((v) => v === 0),
     "拿另一副棋盘去查居然还每一格都有值 —— 夹具没覆盖到这个失败模式",
@@ -388,7 +421,7 @@ test("buildHeat：归一化的分母是两个角色共用的全局最大值", ()
   // 2 号格是死的（生之执的候选），1 号格是活的（死之执的候选）
   const life = new Map<number, number>([[2, 0.02]]);
   const death = new Map<number, number>([[1, 0.08]]);
-  const heat = buildHeat(HEAT_BOARD, { life, death });
+  const heat = buildHeat(HEAT_BOARD, { life, death }, "duel");
 
   assert.ok(Math.abs(heat.peak - 0.08) < 1e-12, `峰值应取全局最大：${heat.peak}`);
   assert.equal(heat.values[1], 1, "最亮的那一格必须正好是 1");
@@ -396,7 +429,7 @@ test("buildHeat：归一化的分母是两个角色共用的全局最大值", ()
 });
 
 test("buildHeat：分布缺失的格子是 0，不是 NaN 也不是别人的值", () => {
-  const heat = buildHeat(HEAT_BOARD, { life: null, death: null });
+  const heat = buildHeat(HEAT_BOARD, { life: null, death: null }, "duel");
   assert.equal(heat.peak, 0);
   for (const v of heat.values) assert.equal(v, 0);
 });
@@ -405,7 +438,7 @@ test("buildHeat：某一方缺失时，只让另一方为 0，不牵连整张图
   // 代理没返回 / 解析失败时会走到这里。整张图黑掉的话，看的人会以为
   // 「这一手模型完全没有偏好」，而事实是「这一半的分布丢了」
   const death = new Map<number, number>([[0, 0.5]]);
-  const heat = buildHeat(HEAT_BOARD, { life: null, death });
+  const heat = buildHeat(HEAT_BOARD, { life: null, death }, "duel");
   assert.equal(heat.values[0], 1, "有分布的那一半照画");
   assert.equal(heat.values[2], 0, "生之执那一半没有数据");
   assert.equal(heat.peak, 0.5, "峰值只来自有数据的那一半");
@@ -415,7 +448,7 @@ test("buildHeat：格号按 r*cols+c 排，与棋盘同序", () => {
   // 顺序错了整张图会转置或错位，而「热力图和棋盘长得不一样」是很容易
   // 看成「模型就是想要那一格」的
   const life = new Map<number, number>([[7, 0.9]]); // r=1,c=3
-  const heat = buildHeat(HEAT_BOARD, { life, death: null });
+  const heat = buildHeat(HEAT_BOARD, { life, death: null }, "duel");
   assert.equal(HEAT_BOARD.cells[7], 0, "7 号格必须是死格，否则这条测试的前提就不成立");
   assert.equal(heat.values[7], 1);
   assert.equal(heat.values[6], 0, "左边的 6 号格不该跟着亮");
@@ -515,7 +548,7 @@ test("决策热力图：每一格都画了一个方块 —— 没有空隙", () 
   const { canvas, ctx } = fakeCanvas();
   const c = new HeatChart(canvas, PALETTE);
   c.resize(132, 132);
-  c.setData(buildHeat(HEAT_BOARD, { life: null, death: null }));
+  c.setData(buildHeat(HEAT_BOARD, { life: null, death: null }, "duel"));
 
   assert.equal(
     heatFills(ctx, PALETTE.life) + heatFills(ctx, PALETTE.death),
@@ -529,7 +562,7 @@ test("决策热力图：长宽可不等（2×16 也不该溢出或重叠）", ()
   const c = new HeatChart(canvas, PALETTE);
   c.resize(132, 132);
   const board = boardFromRows(["##", "#.", ".#", "##"]); // 4×2，只验几何
-  const heat = buildHeat(board, { life: null, death: null });
+  const heat = buildHeat(board, { life: null, death: null }, "duel");
 
   c.setData(heat);
   assert.equal(heat.rows, 4);
@@ -538,7 +571,7 @@ test("决策热力图：长宽可不等（2×16 也不该溢出或重叠）", ()
 });
 
 test("置信度图：两带相交时画出黄色交集，不相交时一格都不画", () => {
-  const overlap = "rgba(251,191,36,.42)";
+  const overlap = "rgba(251,191,36,0.42)";
 
   const { canvas, ctx } = fakeCanvas();
   const c = new ConfidenceChart(canvas);

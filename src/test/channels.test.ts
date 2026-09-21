@@ -62,7 +62,7 @@ test("noul-all：flip_r_c 的键名解回一维格号，概率原样取出", () 
   const board = BOARD();
   const answers = noulAnswers(board, "life", (cell) => cell / 100);
 
-  const probs = parseAnswers(NOUL, answers, board, "life");
+  const probs = parseAnswers(NOUL, answers, board, "life", "duel");
 
   assert.equal(probs.size, DEAD.length);
   for (const cell of DEAD) {
@@ -82,7 +82,7 @@ test("两家键名都要认：Vercel 用 probability，其余用 noul", () => {
     flip_0_3: { type: "noul", noul: 0 },
   } satisfies Record<string, Answer>);
 
-  const probs = parseAnswers(NOUL, full, board, "life");
+  const probs = parseAnswers(NOUL, full, board, "life", "duel");
   assert.equal(probs.get(1), 0.69);
   assert.equal(probs.get(2), 0.96);
   assert.equal(probs.get(3), 0);
@@ -94,8 +94,8 @@ test("返回的 Map 按格号升序 —— 同一个回包换一种键序也得�
   const backward: Record<string, Answer> = {};
   for (const k of Object.keys(forward).reverse()) backward[k] = forward[k];
 
-  const a = [...parseAnswers(NOUL, forward, board, "life").entries()];
-  const b = [...parseAnswers(NOUL, backward, board, "life").entries()];
+  const a = [...parseAnswers(NOUL, forward, board, "life", "duel").entries()];
+  const b = [...parseAnswers(NOUL, backward, board, "life", "duel").entries()];
 
   assert.deepEqual(a, b);
   assert.deepEqual(a.map(([cell]) => cell), [...DEAD].sort((x, y) => x - y));
@@ -103,8 +103,8 @@ test("返回的 Map 按格号升序 —— 同一个回包换一种键序也得�
 
 test("死之执的题面是活格，同一份棋盘两边解析结果互斥", () => {
   const board = BOARD();
-  const life = parseAnswers(NOUL, noulAnswers(board, "life", () => 1), board, "life");
-  const death = parseAnswers(NOUL, noulAnswers(board, "death", () => 1), board, "death");
+  const life = parseAnswers(NOUL, noulAnswers(board, "life", () => 1), board, "life", "duel");
+  const death = parseAnswers(NOUL, noulAnswers(board, "death", () => 1), board, "death", "duel");
 
   assert.deepEqual([...death.keys()], [0, 5, 10]);
   for (const cell of death.keys()) assert.equal(life.get(cell), undefined);
@@ -120,7 +120,7 @@ test("★ 答案里缺了一个键 → 抛错，并点名缺的是哪一个", ()
   delete answers["flip_3_0"]; // 格 12
 
   assert.throws(
-    () => parseAnswers(NOUL, answers, board, "life"),
+    () => parseAnswers(NOUL, answers, board, "life", "duel"),
     (e: unknown) => {
       assert.ok(e instanceof Error);
       assert.match(e.message, /flip_3_0/, "错误里必须点名缺的是哪一题");
@@ -136,7 +136,7 @@ test("★ 答案里只有一个 type、没有概率字段 → 抛错（绝不当
   answers["flip_0_1"] = { type: "noul" } as Answer;
 
   assert.throws(
-    () => parseAnswers(NOUL, answers, board, "life"),
+    () => parseAnswers(NOUL, answers, board, "life", "duel"),
     /flip_0_1/,
   );
 });
@@ -147,7 +147,7 @@ test("概率不是数字 / 超出 [0,1] / 是 NaN → 一律抛错", () => {
     const answers = noulAnswers(board, "life", () => 0.5);
     answers["flip_0_1"] = { type: "noul", noul: bad } as unknown as Answer;
     assert.throws(
-      () => parseAnswers(NOUL, answers, board, "life"),
+      () => parseAnswers(NOUL, answers, board, "life", "duel"),
       /flip_0_1/,
       `概率是 ${String(bad)} 时应当抛错`,
     );
@@ -160,14 +160,14 @@ test("答案里多出一个题面上没有的键 → 抛错（我们对回包的
   answers["flip_1_1"] = { type: "noul", noul: 0.5 }; // (1,1) 是活格，题面里没有
 
   assert.throws(
-    () => parseAnswers(NOUL, answers, board, "life"),
+    () => parseAnswers(NOUL, answers, board, "life", "duel"),
     /flip_1_1/,
   );
 });
 
 test("空 answers → 抛错，绝不返回空映射", () => {
   const board = BOARD();
-  assert.throws(() => parseAnswers(NOUL, {}, board, "life"), /没有/);
+  assert.throws(() => parseAnswers(NOUL, {}, board, "life", "duel"), /没有/);
 });
 
 test("键名格式不对 → 抛错并点出这个键", () => {
@@ -176,7 +176,7 @@ test("键名格式不对 → 抛错并点出这个键", () => {
   delete answers["flip_0_1"];
   answers["0,1"] = { type: "noul", noul: 0.5 };
 
-  assert.throws(() => parseAnswers(NOUL, answers, board, "life"), /0,1/);
+  assert.throws(() => parseAnswers(NOUL, answers, board, "life", "duel"), /0,1/);
 });
 
 test("行列越界（flip_9_9）→ 抛错，不会算出一个越界的格号", () => {
@@ -185,14 +185,14 @@ test("行列越界（flip_9_9）→ 抛错，不会算出一个越界的格号",
   delete answers["flip_0_1"];
   answers["flip_9_9"] = { type: "noul", noul: 0.5 };
 
-  assert.throws(() => parseAnswers(NOUL, answers, board, "life"), /flip_9_9/);
+  assert.throws(() => parseAnswers(NOUL, answers, board, "life", "duel"), /flip_9_9/);
 });
 
 test("答案指向一个对该角色非法的格 → 抛错（棋盘与答案不是同一副）", () => {
   const board = BOARD();
   // 题面按生之执造，却拿死之执的身份去解析：9 个键都会对不上
   const answers = noulAnswers(board, "life", () => 0.5);
-  assert.throws(() => parseAnswers(NOUL, answers, board, "death"), /flip/);
+  assert.throws(() => parseAnswers(NOUL, answers, board, "death", "duel"), /flip/);
 });
 
 /* ══════════════════════════════════════════════════════════════════
@@ -208,7 +208,7 @@ test("choice-all / choice-filtered 抛「未实现」—— 类型留好，M1 �
     { kind: "choice-filtered", filter: "x" },
   ] as Channel[]) {
     assert.throws(
-      () => parseAnswers(ch, answers, board, "life"),
+      () => parseAnswers(ch, answers, board, "life", "duel"),
       /未实现/,
       `通道 ${ch.kind} 应当明确抛「未实现」，而不是安静地返回空映射`,
     );
@@ -226,7 +226,7 @@ test("不改动入参：同一批对象传进去，棋盘与答案都必须原�
   const answers = noulAnswers(board, "life", () => 0.5);
   const keysBefore = Object.keys(answers).sort();
 
-  parseAnswers(NOUL, answers, board, "life");
+  parseAnswers(NOUL, answers, board, "life", "duel");
 
   assert.deepEqual([...board.cells], [...cellsBefore]);
   assert.equal(board.cells, cellsIdentity, "底层数组被换掉了");

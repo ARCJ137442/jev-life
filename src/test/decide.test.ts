@@ -56,7 +56,7 @@ const dist = (entries: ReadonlyArray<readonly [Cell, number]>): CellProbabilitie
 test("首选合法 → 直接取，不标记纠正", () => {
   const board = BOARD();
   const d = dist([[5, 0.7], [0, 0.2], [10, 0.1]]);
-  const r = resolveDecision(d, board, "death", "greedy", 0);
+  const r = resolveDecision(d, board, "death", "duel", "greedy", 0);
 
   assert.equal(r.cell, 5);
   assert.equal(r.coerced, false);
@@ -69,8 +69,8 @@ test("首选合法 → 直接取，不标记纠正", () => {
 test("分布里的插入顺序不影响结果 —— 排序是实现自己的事", () => {
   const board = BOARD();
   // 同一组数，两种插入顺序
-  const a = resolveDecision(dist([[5, 0.7], [0, 0.2], [10, 0.1]]), board, "death", "greedy", 0);
-  const b = resolveDecision(dist([[10, 0.1], [5, 0.7], [0, 0.2]]), board, "death", "greedy", 0);
+  const a = resolveDecision(dist([[5, 0.7], [0, 0.2], [10, 0.1]]), board, "death", "duel", "greedy", 0);
+  const b = resolveDecision(dist([[10, 0.1], [5, 0.7], [0, 0.2]]), board, "death", "duel", "greedy", 0);
   assert.equal(a.cell, b.cell);
 });
 
@@ -82,7 +82,7 @@ test("首选非法 → 取分布内次优的合法格，标记 coerced", () => {
   const board = BOARD();
   // 0 是活格，生之执翻不了；6 与 7 都是死格，且 6 的概率更高
   const d = dist([[0, 0.9], [6, 0.06], [7, 0.04]]);
-  const r = resolveDecision(d, board, "life", "greedy", 0);
+  const r = resolveDecision(d, board, "life", "duel", "greedy", 0);
 
   assert.equal(r.cell, 6, "应当取分布里概率最高的**合法**格");
   assert.equal(r.coerced, true);
@@ -98,7 +98,7 @@ test("绝不引入外部规则 —— 候选只可能来自分布本身", () => 
   const d = dist([[4, 0.6], [7, 0.4]]);
   const picked = new Set<Cell>();
   for (let i = 0; i < 50; i++) {
-    picked.add(resolveDecision(d, board, "life", "greedy", 0).cell);
+    picked.add(resolveDecision(d, board, "life", "duel", "greedy", 0).cell);
   }
   assert.deepEqual([...picked], [4]);
   assert.ok(!picked.has(legalCells(board, "life")[0]), "不该退化到 legal[0]");
@@ -108,7 +108,7 @@ test("分布里一个合法项都没有 → 只能取 legal[0]，并如实标记
   const board = BOARD();
   // 三项全是活格，生之执一格都翻不了
   const d = dist([[0, 0.5], [5, 0.3], [10, 0.2]]);
-  const r = resolveDecision(d, board, "life", "greedy", 0);
+  const r = resolveDecision(d, board, "life", "duel", "greedy", 0);
 
   assert.equal(r.cell, DEAD[0]);
   assert.equal(r.coerced, true);
@@ -117,7 +117,7 @@ test("分布里一个合法项都没有 → 只能取 legal[0]，并如实标记
 
 test("分布为空 → 取 legal[0]，原因与「有分布但无合法项」不同", () => {
   const board = BOARD();
-  const r = resolveDecision(new Map(), board, "life", "greedy", 0);
+  const r = resolveDecision(new Map(), board, "life", "duel", "greedy", 0);
 
   assert.equal(r.cell, DEAD[0]);
   assert.equal(r.coerced, true);
@@ -128,7 +128,7 @@ test("无合法格时抛错，而不是返回一个 undefined 的落点", () => 
   // 全活：生之执一格都翻不动。这种局面本该由终局判定先结束对局
   const full = boardFromRows(["####", "####", "####", "####"]);
   assert.equal(legalCells(full, "life").length, 0);
-  assert.throws(() => resolveDecision(dist([[0, 1]]), full, "life", "greedy", 0), /没有/);
+  assert.throws(() => resolveDecision(dist([[0, 1]]), full, "life", "duel", "greedy", 0), /没有/);
 });
 
 /* ══════════════════════════════════════════════════════════════════
@@ -139,8 +139,8 @@ test("低于门槛 → 标记 belowThreshold，但落子与 greedy 完全一致"
   const board = BOARD();
   const d = dist([[6, 0.3], [7, 0.25], [1, 0.2]]);
 
-  const greedy = resolveDecision(d, board, "life", "greedy", 0.5);
-  const thr = resolveDecision(d, board, "life", "threshold", 0.5);
+  const greedy = resolveDecision(d, board, "life", "duel", "greedy", 0.5);
+  const thr = resolveDecision(d, board, "life", "duel", "threshold", 0.5);
 
   assert.equal(thr.cell, 6);
   assert.equal(thr.cell, greedy.cell, "threshold 策略不得改变动作");
@@ -154,7 +154,7 @@ test("低于门槛 → 标记 belowThreshold，但落子与 greedy 完全一致"
 
 test("门槛为 0 表示不启用 —— 即便概率很低也不标记", () => {
   const board = BOARD();
-  const r = resolveDecision(dist([[6, 0.01], [7, 0.99]]), board, "life", "threshold", 0);
+  const r = resolveDecision(dist([[6, 0.01], [7, 0.99]]), board, "life", "duel", "threshold", 0);
   assert.equal(r.cell, 7);
   assert.equal(r.belowThreshold, false);
   assert.equal(r.reasonKey, "reason.takeTop");
@@ -162,7 +162,7 @@ test("门槛为 0 表示不启用 —— 即便概率很低也不标记", () => 
 
 test("greedy 策略即便低于门槛也不标记 —— 那个字段只属于 threshold", () => {
   const board = BOARD();
-  const r = resolveDecision(dist([[6, 0.01], [7, 0.99]]), board, "life", "greedy", 0.9);
+  const r = resolveDecision(dist([[6, 0.01], [7, 0.99]]), board, "life", "duel", "greedy", 0.9);
   assert.equal(r.cell, 7);
   assert.equal(r.belowThreshold, false);
 });
@@ -170,7 +170,7 @@ test("greedy 策略即便低于门槛也不标记 —— 那个字段只属于 t
 test("threshold 策略下首选非法时，coerced 与 belowThreshold 同时成立", () => {
   const board = BOARD();
   const d = dist([[0, 0.2], [6, 0.15], [7, 0.1]]);
-  const r = resolveDecision(d, board, "life", "threshold", 0.5);
+  const r = resolveDecision(d, board, "life", "duel", "threshold", 0.5);
 
   assert.equal(r.cell, 6);
   assert.equal(r.coerced, true);
@@ -187,18 +187,18 @@ test("sample：rand 注入固定值 → 结果确定，且轮盘赌落在正确�
   // 生之执的合法集里三项：1(0.5) 2(0.3) 3(0.2)，归一化后 total = 1
   const d = dist([[1, 0.5], [2, 0.3], [3, 0.2]]);
 
-  assert.equal(resolveDecision(d, board, "life", "sample", 0, () => 0).cell, 1);
-  assert.equal(resolveDecision(d, board, "life", "sample", 0, () => 0.49).cell, 1);
-  assert.equal(resolveDecision(d, board, "life", "sample", 0, () => 0.51).cell, 2);
-  assert.equal(resolveDecision(d, board, "life", "sample", 0, () => 0.99).cell, 3);
+  assert.equal(resolveDecision(d, board, "life", "duel", "sample", 0, () => 0).cell, 1);
+  assert.equal(resolveDecision(d, board, "life", "duel", "sample", 0, () => 0.49).cell, 1);
+  assert.equal(resolveDecision(d, board, "life", "duel", "sample", 0, () => 0.51).cell, 2);
+  assert.equal(resolveDecision(d, board, "life", "duel", "sample", 0, () => 0.99).cell, 3);
 });
 
 test("sample：同一个 rand 反复调用得到同一个结果（真的可重放）", () => {
   const board = BOARD();
   const d = dist([[1, 0.25], [2, 0.5], [3, 0.25]]);
-  const first = resolveDecision(d, board, "life", "sample", 0, () => 0.4).cell;
+  const first = resolveDecision(d, board, "life", "duel", "sample", 0, () => 0.4).cell;
   for (let i = 0; i < 20; i++) {
-    assert.equal(resolveDecision(d, board, "life", "sample", 0, () => 0.4).cell, first);
+    assert.equal(resolveDecision(d, board, "life", "duel", "sample", 0, () => 0.4).cell, first);
   }
 });
 
@@ -210,7 +210,7 @@ test("sample：无论 rand 取何值都落在合法格上", () => {
 
   for (let i = 0; i < 100; i++) {
     const t = i / 100;
-    const r = resolveDecision(d, board, "life", "sample", 0, () => t);
+    const r = resolveDecision(d, board, "life", "duel", "sample", 0, () => t);
     assert.ok(legal.has(r.cell), `rand=${t} 落到了非法格 ${r.cell}`);
   }
 });
@@ -220,12 +220,12 @@ test("sample：选了分布首选时 coerced=false，否则为 true", () => {
   const d = dist([[6, 0.9], [7, 0.1], [0, 0.0]]);
 
   // rand=0 → 落在 6（分布首选，也是合法格）
-  const top = resolveDecision(d, board, "life", "sample", 0, () => 0);
+  const top = resolveDecision(d, board, "life", "duel", "sample", 0, () => 0);
   assert.equal(top.cell, 6);
   assert.equal(top.coerced, false);
 
   // rand=0.95 → 落在 7（合法，但不是分布首选）
-  const second = resolveDecision(d, board, "life", "sample", 0, () => 0.95);
+  const second = resolveDecision(d, board, "life", "duel", "sample", 0, () => 0.95);
   assert.equal(second.cell, 7);
   assert.equal(second.coerced, true);
 });
@@ -234,7 +234,7 @@ test("sample：合法池为空时退回贪心路径，而不是返回 undefined"
   const board = BOARD();
   // 分布只覆盖活格，生之执的池子是空的
   const d = dist([[0, 0.6], [5, 0.4]]);
-  const r = resolveDecision(d, board, "life", "sample", 0, () => 0.3);
+  const r = resolveDecision(d, board, "life", "duel", "sample", 0, () => 0.3);
   assert.equal(r.cell, DEAD[0]);
   assert.equal(r.coerced, true);
   assert.equal(r.reasonKey, "reason.noLegal");
@@ -273,8 +273,8 @@ test("同一份分布，换角色得到不同的落子 —— 合法集不是全
   const board = BOARD();
   const d = dist([[0, 0.9], [1, 0.1]]);
 
-  const asDeath = resolveDecision(d, board, "death", "greedy", 0);
-  const asLife = resolveDecision(d, board, "life", "greedy", 0);
+  const asDeath = resolveDecision(d, board, "death", "duel", "greedy", 0);
+  const asLife = resolveDecision(d, board, "life", "duel", "greedy", 0);
 
   assert.equal(asDeath.cell, 0, "死之执能翻活格 0");
   assert.equal(asDeath.coerced, false);
@@ -300,7 +300,8 @@ test("任何策略下返回的落点都必须是合法的", () => {
     const legal = new Set(legalCells(board, role));
     for (const strategy of ["greedy", "sample", "threshold"] as const) {
       for (const t of [0, 0.5, 1]) {
-        const r = resolveDecision(d, board, role, strategy, t, () => t);
+        // 双人局：合法集就是 `legalCells`，所以这条对照是逐格成立的
+        const r = resolveDecision(d, board, role, "duel", strategy, t, () => t);
         assert.ok(
           legal.has(r.cell),
           `role=${role} strategy=${strategy} threshold=${t} 给出了非法落点 ${r.cell}`,
@@ -324,9 +325,9 @@ test("不改动入参：同一批对象传进去，棋盘与分布都必须原�
   const d = dist([[0, 0.9], [1, 0.1], [5, 0.0]]);
   const entriesBefore = [...d.entries()];
 
-  resolveDecision(d, board, "life", "sample", 0.5, () => 0.3);
-  resolveDecision(d, board, "death", "threshold", 0.5);
-  resolveDecision(d, board, "life", "greedy", 0);
+  resolveDecision(d, board, "life", "duel", "sample", 0.5, () => 0.3);
+  resolveDecision(d, board, "death", "duel", "threshold", 0.5);
+  resolveDecision(d, board, "life", "duel", "greedy", 0);
 
   assert.deepEqual([...board.cells], [...cellsBefore]);
   assert.equal(board.cells, cellsIdentity, "底层数组被换掉了，说明有人拷了一份回去");

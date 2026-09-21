@@ -46,8 +46,16 @@ export interface ModeUi {
    * 成立的前提（「死之执还在场上」）已经不成立了。设置本身照旧留在存档里。
    */
   readonly deathColumnEnabled: boolean;
-  /** 置信度图图例里「死之执」那一项是否显示 */
-  readonly deathLegendVisible: boolean;
+  /**
+   * 置信度图的图例**整块**是否显示。
+   *
+   * ⚠ 它原本是「死之执那一项是否显示」（`deathLegendVisible`）。生死一体之后
+   * 单人局只剩**一条黄色的带**，图例里没有任何一项对得上它 —— 用户 2026-09-21
+   * 定的是「无需图例」。于是「某一项不显示」不再是一个独立的意思：
+   * 两种模式下整块要么都在、要么都不在。留着一个更细的字段只会让两者漂移
+   * （图例整块收起了，里面某一项还在被单独地设成 `display:none`）。
+   */
+  readonly legendVisible: boolean;
   /** 死之执那条胜负线的标签。单人局里它说的是「棋盘死绝」 */
   readonly deathWinLabel: string;
   /**
@@ -111,7 +119,7 @@ export interface ModeUi {
 const DUEL: ModeUi = {
   solo: false,
   deathColumnEnabled: true,
-  deathLegendVisible: true,
+  legendVisible: true,
   deathWinLabel: "game.deathWin",
   lifeWinLabel: "game.lifeWin",
   lifeLabel: "log.roleLife",
@@ -138,7 +146,7 @@ const DUEL: ModeUi = {
 const SOLO: ModeUi = {
   solo: true,
   deathColumnEnabled: false,
-  deathLegendVisible: false,
+  legendVisible: false,
   deathWinLabel: "game.deathWinSolo",
   lifeWinLabel: "game.lifeWinSolo",
   lifeLabel: "log.rolePlayer",

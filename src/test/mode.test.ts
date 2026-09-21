@@ -88,8 +88,12 @@ test("★ 单人局必须**收起**死之执那一栏，并收起它的图例", 
 
   assert.equal(duel.deathColumnEnabled, true);
   assert.equal(solo.deathColumnEnabled, false, "单人局里死之执那一栏的设置一项都不会被用到，却仍然可编辑");
-  assert.equal(duel.deathLegendVisible, true);
-  assert.equal(solo.deathLegendVisible, false, "单人局的置信度图上永远画不出红色的带，图例却还挂着死之执");
+  assert.equal(duel.legendVisible, true);
+  assert.equal(
+    solo.legendVisible,
+    false,
+    "单人局只有一条黄带，图例里没有任何一项对得上它 —— 用户定的是「无需图例」",
+  );
   assert.equal(solo.solo, true);
   assert.equal(duel.solo, false);
 });

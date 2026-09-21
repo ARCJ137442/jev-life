@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  actionCells,
+  allCells,
   boardFromRows,
   boardKey,
   classifyTermination,
@@ -328,12 +330,30 @@ function roundKey(b: Board, life: number, death: number): string {
   return boardKey(lifeStep(flip(flip(b, life), death), "bounded"));
 }
 
-/** 全部 (生之执落点, 死之执落点) 组合的后继 key */
+/** 全部 (生之执落点, 死之执落点) 组合的后继 key —— **双人局**的「推得动」判据 */
 function roundSuccessors(b: Board): Set<string> {
   const out = new Set<string>();
   for (const l of legalCells(b, "life")) {
     for (const d of legalCells(b, "death")) out.add(roundKey(b, l, d));
   }
+  return out;
+}
+
+/**
+ * **单人局**全部落点的后继 key。
+ *
+ * ⚠ 与 `roundSuccessors` 不是一回事，不能互相顶替：单人局只有**一格**落子，
+ * 而且行动方生死一体，合法集是**全部格子**（`actionCells`）—— 所以要枚举的是
+ * 16 个单翻，不是「死格 × 活格」的成对组合。
+ *
+ * 这一条是 2026-09-21 生死一体那次改出来的：在那之前单人局只有死格可翻，
+ * 有个用例就借用了双人的 `roundSuccessors` 当 `seen`，靠 4×4 上单翻与双翻的
+ * 后继 key **偶然重合**而通过。合法集改成全部格子之后不再重合，它就红了 ——
+ * 而那次变红是**对的**，被测的语义确实变了。
+ */
+function soloSuccessors(b: Board): Set<string> {
+  const out = new Set<string>();
+  for (const c of allCells(b)) out.add(boardKey(lifeStep(flip(b, c), "bounded")));
   return out;
 }
 
@@ -491,16 +511,63 @@ test("★ 单人：repeatBlocked 的胜方不会落到「死之执」上", () =>
   // 占比冻在死之执线附近、防抖又没满时，双人那条按占比定胜负；
   // 单人局里把「死之执胜」映成 null（没有对手），不能照抄
   const b = boardFromRows(["####", "####", "####", "###."]);
-  const seen = new Set<string>([boardKey(b), ...roundSuccessors(b)]);
   const slow: GameRules = { ...rules, lifeStreak: 99, deathStreak: 99 };
 
+  // 两种模式的 `seen` **必须分开造**：双人的后继是「死格 × 活格」成对组合，
+  // 单人只有单翻、而且合法集是全部格子（`soloSuccessors` 的注释记着这次改动）
+  const duelSeen = new Set<string>([boardKey(b), ...roundSuccessors(b)]);
+  const soloSeen = new Set<string>([boardKey(b), ...soloSuccessors(b)]);
+
   // 双人：占比 0.9375 ≥ lifeWinRatio → 生之执胜
-  assert.equal(classifyTermination(snap(b, 10, [0.9]), slow, seen)?.winner, "life");
-  // 单人：同一副局面，结论同样是生之执胜（映 null 只针对 death 那一侧）
-  assert.deepEqual(classifyTermination(soloSnap(b, 10, [0.9]), slow, seen), {
+  assert.equal(classifyTermination(snap(b, 10, [0.9]), slow, duelSeen)?.winner, "life");
+  // 单人：同一副局面，结论同样是玩家胜（映 null 只针对 death 那一侧）
+  assert.deepEqual(classifyTermination(soloSnap(b, 10, [0.9]), slow, soloSeen), {
     reason: "repeatBlocked",
     winner: "life",
   });
+});
+
+test("★ actionCells：双人局与 legalCells 逐格相同；单人局是**全部格子**", () => {
+  const b = boardFromRows(["##..", ".##.", "....", "###."]);
+
+  // 双人局：一个字节都不该变 —— 这条改动**不允许**碰到双人的合法集
+  for (const role of ["life", "death"] as const) {
+    assert.deepEqual(
+      actionCells(b, role, "duel"),
+      legalCells(b, role),
+      `${role} 在双人局下的合法集被改动了`,
+    );
+  }
+
+  // 单人局：行动方生死一体，两种都能翻 ⟹ 全部格子（升序）
+  assert.deepEqual(actionCells(b, "life", "solo"), allCells(b));
+  assert.equal(actionCells(b, "life", "solo").length, b.cells.length);
+  // 「全部」不是「死格那一半」的同义词 —— 夹具上两者本来就不同，
+  // 免得将来棋盘凑巧对称、这条断言变成恒真
+  assert.notDeepEqual(actionCells(b, "life", "solo"), legalCells(b, "life"));
+});
+
+test("★ 单人：翻**活格**也算法定落点 —— 只查死格会把「其实推得动」判成推不动", () => {
+  // 15 活 1 死：只有 1 个死格可翻，但那 1 个落点推不出新局面；
+  // 而「把某个活格翻死」能。旧实现只枚举死格 ⟹ 误判推不动
+  const b = boardFromRows(["####", "####", "####", "###."]);
+  const slow: GameRules = { ...rules, lifeStreak: 99, deathStreak: 99 };
+
+  // 先把夹具前提钉死，免得将来棋盘变了、用例却还在「靠运气」通过
+  assert.equal(legalCells(b, "life").length, 1, "夹具不是预期的 1 个死格");
+  assert.equal(actionCells(b, "life", "solo").length, 16, "单人局的合法集应当是全部 16 格");
+
+  // `seen` 里只放「翻那个死格」得到的那一个后继 —— 于是推得动的**唯一**出路
+  // 就是翻活格。旧实现（只枚举死格）会在这里判 true
+  const onlyDeadFlip = new Set<string>([
+    boardKey(b),
+    boardKey(lifeStep(flip(b, legalCells(b, "life")[0]), "bounded")),
+  ]);
+  assert.equal(
+    classifyTermination(soloSnap(b, 10, [0.5]), slow, onlyDeadFlip),
+    null,
+    "翻活格能推出新局面，却被判成推不动 —— 合法集少算了活格那一半",
+  );
 });
 
 test("★ 回合上限 = null 表示**不设上限**：回合数再大也不判和局", () => {

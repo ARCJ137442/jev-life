@@ -124,6 +124,37 @@ export function legalCells(b: Board, role: Role): Cell[] {
   return out;
 }
 
+/** 全部格号，升序。单人局的合法集就是它 —— 见 `actionCells` */
+export function allCells(b: Board): Cell[] {
+  const out: Cell[] = [];
+  for (let i = 0; i < b.cells.length; i++) out.push(i);
+  return out;
+}
+
+/**
+ * 行动方这一回合**能翻哪些格** —— 按模式分叉的唯一入口。
+ *
+ * - **双人局**：`legalCells` 按角色取一半（生之执翻死格、死之执翻活格）
+ * - **单人局**：行动方**生死一体** —— 两种都能翻，所以是**全部格子**
+ *
+ * ═══ 为什么另开一个函数，而不是给 `legalCells` 加分支 ═══
+ *
+ * 那会让「翻死格」与「翻任意格」两套语义**共用一个名字**，而它们的调用者要的
+ * 是不同的东西：`roundIsBlocked` 问的是「这一回合有没有能改变局面的落点」，
+ * 而终局判定里那一侧问的仍是「死格还剩几个」。混成一个函数之后，想改其中
+ * 一处就得先读遍全部调用点才能确定不会动到另一处 —— 这个项目已经在同一种
+ * 错上栽过两次（`callPolicy` 存了没人读、`chainOfThought` 只在界面上有），
+ * 根因都是「一件事有了两个意思」。
+ *
+ * ⚠ `mode` **必填、不给默认值**：与 `GameSnapshot.mode` / `StateInput.mode`
+ * 同一条纪律 —— 默认值会让「单人局按双人规则判」**安静地发生**，而那种错的
+ * 症状（题数少一截、终局理由不对）全都指向不了这里。
+ */
+export function actionCells(b: Board, role: Role, mode: Mode): Cell[] {
+  if (mode === "solo") return allCells(b);
+  return legalCells(b, role);
+}
+
 /**
  * B3/S23 的朴素参照实现 —— **只用于测试**。
  *
@@ -436,20 +467,22 @@ function roundIsBlocked(
   seen: ReadonlySet<string>,
   mode: Mode,
 ): boolean {
-  const born = legalCells(board, "life");
-
-  // ★ 单人模式：一回合只有**一格**落子，所以「推得动」只问生之执的那些落点。
-  // 仍然按一侧判是**对的**（不是简化）—— 死之执根本不落子，把它的落点也算进
-  // 「这一回合能不能改变局面」是在给一个不存在的行动方投票。
+  // ★ 单人模式：一回合只有**一格**落子，所以「推得动」只问行动方自己的落点。
+  // 按一侧判是**对的**（不是简化）—— 单人局里只有一个行动方。
   // 与双人那条「按角色判是错的」并不矛盾：那里错的原因是**忽略了同回合
-  // 另一方的落子**，而单人模式下另一方本来就没有落子。
+  // 另一方的落子**，而单人局里另一方本来就不存在。
+  //
+  // ⚠ 落点集合是 `actionCells`（生死一体 = **全部格子**），不是 `legalCells`。
+  // 只枚举死格会漏掉「把活格翻死」那一半 —— 于是一个「只有翻活格才推得动」
+  // 的局面会被判成推不动，而那一局的终局理由是错的、且没有任何迹象指向这里。
   if (mode === "solo") {
-    for (const life of born) {
-      if (!seen.has(boardKey(lifeStep(flip(board, life), topology)))) return false;
+    for (const cell of actionCells(board, "life", mode)) {
+      if (!seen.has(boardKey(lifeStep(flip(board, cell), topology)))) return false;
     }
     return true;
   }
 
+  const born = legalCells(board, "life");
   const killed = legalCells(board, "death");
   for (const life of born) {
     // 生之执先落子。翻一次得到一个中间局面，再让死之执在它上面落子 ——
@@ -579,10 +612,20 @@ export function classifyTermination(
   // 2. 走投无路。双人模式查两边、与被问的角色无关 —— 胜方是把棋盘**清空**
   //    （死执）或**占满**（生执）的那一方，不套阈值（理由见函数头那段）。
   //
-  //    ★ 单人模式**只查生之执那一侧**：死之执根本不会落子，「它无处可翻」
-  //    不构成终局 —— 棋盘全死时生之执反而处处可翻（每一格都是死格）。
-  //    照搬双人那条会把「棋盘被清空」当成终局判负，而单人模式下那恰恰是
-  //    可以继续下的局面（死绝是另一条 reason，靠占比连续越界来判）。
+  //    ★ 单人模式只查下面那一条，而且它的**含义变了**（`actionCells` 那次
+  //    改动之后）：行动方生死一体、两种格子都能翻，所以「无处可翻」在单人局里
+  //    **不可能发生**。剩下这条在单人局里的意思变成了 ——
+  //    `legalCells(board, "life")` 为空 = 一个死格都不剩 = **棋盘被占满**，
+  //    那是「把自己的目标推到极限」的胜利形态（用户 2026-09-21 定：**占满仍是
+  //    胜利**，不因生死一体而取消），不是「没棋可走就输」。
+  //
+  //    ⚠ 判据仍然写成「生之执那一侧还剩不剩格子」，**没有**改写成
+  //    `aliveCount === 总格数`：两者今天等价，但这个函数问的一直是
+  //    「某一侧还有没有落点」，占满只是它在单人局下的表现形式。写死「占满」
+  //    之后，将来若给单人局加上别的落点限制，这一条会静默地不再触发。
+  //
+  //    单人局**不会**报「棋盘被清空」那条：棋盘全死时行动方处处可翻
+  //    （每一格都是死格），死绝是另一条 reason，靠占比连续越界来判。
   if (!solo && legalCells(board, "death").length === 0) {
     return { reason: "noLegalCell", winner: "death" };
   }

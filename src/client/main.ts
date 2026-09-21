@@ -42,7 +42,7 @@ import { parseAnswers } from "../core/channels.js";
 import { resolveDecision } from "../core/decide.js";
 import type { CellProbabilities } from "../core/decide.js";
 import type { Channel } from "../core/channels.js";
-import type { Board, Cell, GameRules, Role, Termination } from "../core/types.js";
+import type { Board, Cell, GameRules, Mode, Role, Termination } from "../core/types.js";
 import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
 import type { Questions } from "../shared/types.js";
 import { JevError } from "../shared/backend.js";
@@ -81,6 +81,7 @@ import {
   type RoleSettings,
 } from "./config.js";
 import {
+  CHART_YELLOW,
   ConfidenceChart,
   HeatChart,
   MomentumChart,
@@ -559,9 +560,7 @@ window.addEventListener("orientationchange", () =>
  * ③ 是**当回合**的空间分布。
  */
 function chartSeries(): ChartSeries[] {
-  const out: ChartSeries[] = [];
-  for (const role of ROLE_ORDER) {
-    const meta = ROLE_META[role];
+  const pointsOf = (role: Role): ChartPoint[] => {
     const points: ChartPoint[] = [];
     for (const row of state.logs) {
       if (row.failed) continue; // 失败的回合没有分布，画上去会在图上砸出一个 0 的坑
@@ -569,11 +568,36 @@ function chartSeries(): ChartSeries[] {
       if (!rl || rl.error) continue;
       points.push({ top: rl.top, bottom: rl.bottom, median: rl.median });
     }
+    return points.slice(-MAX_CHART_POINTS);
+  };
+
+  // ★ 单人局**只出一条**，而且是黄的。
+  //
+  // 那里只有一个行动方、生死一体 —— 它有且只有一条置信度序列。留着原来的
+  // 两条会得到一根永远不动的空序列（死之执没有日志可画），而「绿/红」这两个
+  // 颜色在单人局里指的都是不存在的人。黄是图表语义自己的颜色（`CHART_YELLOW`），
+  // 与交集带同一个色：它回答「这里只有一件事」，而不是「这是谁」。
+  //
+  // 图例也跟着整块收起（`syncModeUi`），不留一个没有对应曲线的色块
+  if (store.duel.mode === "solo") {
+    return [
+      {
+        stroke: CHART_YELLOW,
+        fillFrom: withAlpha(CHART_YELLOW, 0.3),
+        fillTo: withAlpha(CHART_YELLOW, 0.05),
+        points: pointsOf("life"),
+      },
+    ];
+  }
+
+  const out: ChartSeries[] = [];
+  for (const role of ROLE_ORDER) {
+    const meta = ROLE_META[role];
     out.push({
       stroke: meta.color,
       fillFrom: meta.band,
       fillTo: meta.faint,
-      points: points.slice(-MAX_CHART_POINTS),
+      points: pointsOf(role),
     });
   }
   return out;
@@ -609,7 +633,9 @@ function refreshModelCharts(): void {
   // 这一手翻过、或被演化改写过的那一片格子角色就反了 —— 查的是另一张表，
   // 取回来一片 0。而「每一格都有值、没有空隙」正是这张图的规格。
   const basis = state.probsBoard ?? state.board;
-  if (state.probs.life || state.probs.death) heat.setData(buildHeat(basis, state.probs));
+  if (state.probs.life || state.probs.death) {
+    heat.setData(buildHeat(basis, state.probs, store.duel.mode));
+  }
   else heat.clear();
 }
 
@@ -737,6 +763,12 @@ function hideOverlay(): void {
 
 interface RoleAttempt {
   readonly role: Role;
+  /**
+   * 对局模式。**它是这一手的一部分，不只是全局背景** —— 单人局里行动方
+   * 生死一体，合法集是全部格子，所以 `parseAnswers` / `resolveDecision`
+   * 都要按模式去算题面。少了它，单人局会按双人的题面解析 64 个键里的一半。
+   */
+  readonly mode: Mode;
   readonly settings: RoleSettings;
   readonly channel: Channel;
   readonly request: DecisionRequest;
@@ -832,8 +864,15 @@ async function evaluateRole(attempt: RoleAttempt): Promise<RoleOutcome> {
   try {
     const res = await backend.evaluate(attempt.request);
 
-    const probs = parseAnswers(attempt.channel, res.answers, state.board, role);
-    const r = resolveDecision(probs, state.board, role, settings.strategy, settings.threshold);
+    const probs = parseAnswers(attempt.channel, res.answers, state.board, role, attempt.mode);
+    const r = resolveDecision(
+      probs,
+      state.board,
+      role,
+      attempt.mode,
+      settings.strategy,
+      settings.threshold,
+    );
     return {
       ok: true,
       result: res,
@@ -916,6 +955,7 @@ async function doTurn(): Promise<void> {
     const channel = channelOf(settings);
     return {
       role,
+      mode,
       settings,
       channel,
       request: {
@@ -2032,10 +2072,10 @@ function syncModeUi(): void {
   // 模式下拉下面那段说明：选到什么就读什么（原先写死讲单人）
   $("modeNote").textContent = t(m.modeNote);
 
-  // ① 置信度图的图例：单人时死之执那一项整个不出现。
-  // 那张图上永远不会有红色的带（没有死之执的日志就取不到分布），
-  // 留一个没有曲线的图例比没有图例更坏
-  $("lgdDeath").style.display = m.deathLegendVisible ? "" : "none";
+  // ① 置信度图的图例**整块**：单人局里那条带是黄的、只有一条，
+  // 图例里没有任何一项对得上它 —— 用户定的是「无需图例」。
+  // 双人局里两项都在（绿=生、红=死），照旧
+  $("lgdBox").style.display = m.legendVisible ? "" : "none";
   $("lgdLifeTxt").textContent = t(m.lifeLabel);
 
   // ② 两条胜负线的标签。死之执那条在单人局说的是「棋盘死绝」（局面，不是
@@ -3249,7 +3289,7 @@ function boot(): void {
     "board", "chart", "chartBox", "momentum", "momentumBox", "heat", "heatBox",
     "led", "status", "cost", "avgCost", "lat", "backend",
     "sAlive", "sRatio", "sTurn", "sMax", "sMin", "decision", "dTurn",
-    "lgdDeath", "lgdLifeTxt", "subTitle", "memDesc", "deathWinLbl", "lifeWinLbl",
+    "lgdBox", "lgdLifeTxt", "subTitle", "memDesc", "deathWinLbl", "lifeWinLbl",
     "apiRoleNote", "tplList", "modeNote",
     "bToggle", "bStep", "bNew", "bClearBoard", "drawHint", "bResult", "pace", "paceVal",
     "bLang", "langLbl", "bGame", "bStrategy", "bApi", "bLog", "bArchive",

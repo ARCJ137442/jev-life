@@ -37,7 +37,7 @@
  * 提示词改了就不叫对照实验（2048 用同样的方式对待它 —— 提示词不随界面语言变）。
  */
 
-import { aliveCount, flip, legalCells, lifeStep } from "./life.js";
+import { actionCells, aliveCount, flip, lifeStep } from "./life.js";
 import { detectPatterns } from "./patterns.js";
 import type { DetectedPattern } from "./patterns.js";
 import { noulDiscriminator } from "../shared/types.js";
@@ -304,7 +304,10 @@ export function buildState(input: StateInput): JevState {
   const aids: StateAids = {
     board: toGrid(board),
     board_legend: boardLegend(board),
-    valid_cells: legalCells(board, role).map((cell) => rowCol(board, cell)),
+    // `actionCells` 而不是 `legalCells`：单人局里行动方生死一体，题面里的
+    // 合法格是**全部格子**（8×8 从约 55 题变成 64 题）—— 这一处与
+    // `buildQuestions` 必须用**同一个**集合，否则模型答的题与解析时期望的键对不上
+    valid_cells: actionCells(board, role, mode).map((cell) => rowCol(board, cell)),
     strategy_hint: context.strategyHint.trim(),
     ...(detect ? { detected_patterns: detectPatterns(board).map(serializePattern) } : {}),
     ...(memory > 0 ? { recent_history: history.slice(-memory).map(serializeTurn) } : {}),
@@ -379,7 +382,7 @@ function cellOf(board: Board, r: number, c: number): Cell {
 }
 
 function buildNoulAll(input: StateInput, backend: string): Questions {
-  const cells = legalCells(input.board, input.role);
+  const cells = actionCells(input.board, input.role, input.mode);
 
   // 合法集为空 ⟺ 棋盘全死 / 全活 ⟺ 终局判定本该已经结束对局。
   // 这里抛错而不是返回空 record：空 record 会被当成一次「问题为零」的请求

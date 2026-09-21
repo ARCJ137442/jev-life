@@ -377,11 +377,20 @@ async function play(args: Args): Promise<void> {
       if (res.costUsd === null) totals.costUnknown = true;
       else totals.cost += res.costUsd;
 
-      const probs: CellProbabilities = channels.parseAnswers(channel, res.answers, board, req.role);
+      // 这个工具**只跑双人局**（`mode: "duel"` 在两处写死，见文件头）——
+      // 单人局的题面与合法集不同，真要跑得先把它做成一个参数
+      const probs: CellProbabilities = channels.parseAnswers(
+        channel,
+        res.answers,
+        board,
+        req.role,
+        "duel",
+      );
       const resolution = decide.resolveDecision(
         probs,
         board,
         req.role,
+        "duel",
         args.strategy,
         args.threshold,
         rng(mix(args.seed, req.role, turn + 1)),
