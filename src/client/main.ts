@@ -90,7 +90,7 @@ import {
   withAlpha,
 } from "./chart.js";
 import type { ChartPoint, ChartSeries, MomentumInput } from "./chart.js";
-import { BoardRenderer, FLIP_MS } from "./render.js";
+import { BoardRenderer, FLIP_MS, flipColor } from "./render.js";
 import { scoreNow, turnScoreViews } from "./score.js";
 import type { ScoreView } from "./score.js";
 import { deserializeTurn, serializeTurn, type StoredTurn } from "./session.js";
@@ -1156,16 +1156,28 @@ async function doTurn(): Promise<void> {
      ★ 记分板挂在**各段落地的那一刻**上（`onPhase`），而不是在这之后立刻刷：
      方块真正变的是那两刻，数字要跟它们同步。态势图（②）同理 —— 它与记分板
      同处一卡、说的都是「游戏本身的客观状态」，本回合那个点要等演化落地才画。 */
+  // ★ 选框与粒子的颜色按**这一手会把它变成什么**取，不按「谁在翻」——
+  // 翻死格 = 让它活 → 绿；翻活格 = 让它死 → 红。
+  //
+  // 双人局里这两种说法**恰好一致**（生之执只能翻死格、死之执只能翻活格），
+  // 所以从前直接写死 `"life"` / `"death"` 从没出过问题。**单人局里行动方
+  // 生死一体、两种都能翻**，于是「玩家把活格翻死」会顶着生之执的绿 ——
+  // 看起来像渲染坏了，根因是把「谁」当成了「做什么」。
+  //
+  // `board` 是**本回合开始时**那一副（这一手还没落上去），所以 `flipColor`
+  // 读到的正是「翻之前这一格是什么」。
+  const colorOf = (cell: Cell): Role => flipColor(board, cell);
+
   renderer.playTurn(
     {
       mid,
       after: next,
       flips:
         deathFlip === null
-          ? [{ cell: lifeFlip, role: "life" }]
+          ? [{ cell: lifeFlip, color: colorOf(lifeFlip) }]
           : [
-              { cell: lifeFlip, role: "life" },
-              { cell: deathFlip, role: "death" },
+              { cell: lifeFlip, color: colorOf(lifeFlip) },
+              { cell: deathFlip, color: colorOf(deathFlip) },
             ],
     },
     (phase) => {

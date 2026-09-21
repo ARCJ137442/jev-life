@@ -29,6 +29,7 @@ import {
   SCALE_OF_GLOW,
   approach,
   easeK,
+  flipColor,
   makeVisual,
   particleAlpha,
   particleShrink,
@@ -169,6 +170,27 @@ test("粒子恰好活满 ttl 帧数，不多不少", () => {
   assert.equal(steps, 3);
 });
 
+/* ═══════════ 落子的颜色 ═══════════ */
+
+test("★ 落子颜色按「这一手会把它变成什么」取，**不按谁在翻**", () => {
+  // 双人局里两者恰好一一对应（生之执只能翻死格、死之执只能翻活格），所以
+  // 按角色取色从没出过问题。**单人局里行动方生死一体、两种都能翻** ——
+  // 那时按角色取色会让「玩家把活格翻死」也闪绿光，看起来像渲染坏了
+  const dead = cell(2, 2); // BOARD 里是死格
+  const alive = cell(0, 0); // BOARD 里是活格
+  assert.equal(BOARD.cells[dead], 0, "夹具前提：这一格应当是死的");
+  assert.equal(BOARD.cells[alive], 1, "夹具前提：这一格应当是活的");
+
+  assert.equal(flipColor(BOARD, dead), "life", "翻死格 = 让它活 → 绿");
+  assert.equal(flipColor(BOARD, alive), "death", "翻活格 = 让它死 → 红");
+
+  // 与热力图同一条判据：颜色只取决于**翻之前**那一格的生死，
+  // 与谁在翻无关。把棋盘翻过来，两格的取色应当整个对调
+  const flipped = flip(flip(BOARD, dead), alive);
+  assert.equal(flipColor(flipped, dead), "death");
+  assert.equal(flipColor(flipped, alive), "life");
+});
+
 /* ═══════════ 落子 vs 迭代 ═══════════ */
 
 test("落子：起始缩放 0、起始不透明度 1、挂对应角色的发光选框", () => {
@@ -222,23 +244,47 @@ test("手绘翻转：按**落子**的形状缩放，但不挂选框（与演化�
   assert.deepEqual(plan.get(c), { kind: "spawn", scale: 0, alpha: 1, glow: null });
 });
 
-test("手绘翻死与落子翻死在缩放上一致，在选框上不同", () => {
+test("★ 落子翻死也要挂**红**框 —— 规格写的是「任一行动方翻转一格都发光」", () => {
+  // 这一条曾把旧行为写死成「翻死不带选框」，而那违背 `docs/ui-spec.md`：
+  //   | 落子 | 任一行动方翻转一格 | …外加发光选框淡出 —— 生之执绿、**死之执红** |
+  // 旧实现只有 `spawn` / `update`（格子由死变活）会发选框，于是死之执的落子
+  // 从来没有红框；生死一体之后单人局更是只剩绿框（只有「翻活」那一半会亮）
+  const alive = cell(0, 0);
+  const board = flip(BOARD, alive);
+  const byRole = planCells(new Set([alive]), board, new Map<Cell, Role | null>([[alive, "death"]]), true);
+
+  const b = byRole.get(alive);
+  assert.equal(b?.kind, "fade", "翻死是淡出，不是消失后重生");
+  assert.ok(b?.kind === "fade" && b.glow === "death", `翻死没挂选框：${JSON.stringify(b)}`);
+});
+
+test("手绘翻死与落子翻死：**缩放的形状相同**，只有落子才挂选框", () => {
+  // 「被翻动了」与「被某个角色翻动了」是两件事：前者定缩放的形状，
+  // 后者定有没有选框。手绘（值是 null）只有前者
   const alive = cell(0, 0);
   const board = flip(BOARD, alive);
   const silent = planCells(new Set([alive]), board, new Map<Cell, Role | null>([[alive, null]]), true);
   const byRole = planCells(new Set([alive]), board, new Map<Cell, Role | null>([[alive, "death"]]), true);
 
-  assert.deepEqual(silent.get(alive), byRole.get(alive), "翻死的形状与有没有角色无关");
-  assert.deepEqual(silent.get(alive), { kind: "fade", toScale: 0 });
+  const s = silent.get(alive);
+  const b = byRole.get(alive);
+  assert.equal(s?.kind, "fade");
+  assert.equal(b?.kind, "fade");
+  assert.ok(s?.kind === "fade" && b?.kind === "fade");
+  if (s.kind !== "fade" || b.kind !== "fade") return; // 给 TS 收窄
+
+  assert.equal(s.toScale, b.toScale, "翻死的缩放形状与有没有角色无关");
+  assert.equal(s.glow, null, "手绘没有行动方，不挂选框");
+  assert.equal(b.glow, "death", "落子翻死挂的是死之执的框");
 });
 
 test("翻死缩到 0，演化死亡缩到 0.86 —— 两者不同", () => {
   const bornAlive = cell(0, 0);
 
-  // 落子翻死：与「0 → 1」对称地缩到没有
+  // 落子翻死：与「0 → 1」对称地缩到没有（并挂红框，见上面那条）
   assert.deepEqual(
     planCells(new Set([bornAlive]), flip(BOARD, bornAlive), new Map([[bornAlive, "death"]]), true).get(bornAlive),
-    { kind: "fade", toScale: 0 },
+    { kind: "fade", toScale: 0, glow: "death" },
   );
 
   // 演化死亡：2048 那套 0.86 收缩，缩完还留着一点余像
@@ -248,9 +294,12 @@ test("翻死缩到 0，演化死亡缩到 0.86 —— 两者不同", () => {
     if (BOARD.cells[i] && !after.cells[i]) died.push(i);
   }
   assert.ok(died.length > 0, "这副棋盘的演化相应当有死亡格，否则这条测试什么也没测");
+  // `glow: null` 这一栏是刻意的：演化杀死格子时**没有行动方**，不挂选框 ——
+  // 规格：「迭代 …… 不带发光选框」。它与上面那条「翻死要挂红框」合起来，
+  // 才是规格里落子与迭代在选框上的那条分界
   assert.deepEqual(
     planCells(new Set(died), after, new Map(), true).get(died[0]),
-    { kind: "fade", toScale: 0.86 },
+    { kind: "fade", toScale: 0.86, glow: null },
   );
 });
 
@@ -343,7 +392,7 @@ test("渲染器空转一整回合不抛异常，落子相画了选框与粒子�
   r.playTurn({
     mid,
     after,
-    flips: [{ cell: cell(2, 2), role: "life" }],
+    flips: [{ cell: cell(2, 2), color: "life" }],
   });
 
   // 第一帧：落子相已经开始
@@ -406,7 +455,7 @@ test("时序比例：缩放/粒子占选框的一半，一轮 = 2 倍选框时�
   const mid = flip(BOARD, cell(2, 2));
   const after = lifeStep(mid, "bounded");
   const t0 = performance.now();
-  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] });
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), color: "life" }] });
 
   // ⚠ **必须逐帧推进**：渲染器把单帧 dt 上限压在 60ms（防跳帧），
   //    稀疏地跳时钟等于「只过了几帧」，动画根本没往前走
@@ -435,7 +484,7 @@ test("动效关掉时不排帧，且两副棋盘当场落地", () => {
 
   const mid = flip(BOARD, cell(2, 2));
   const after = lifeStep(mid, "bounded");
-  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] });
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), color: "life" }] });
 
   assert.equal(frame(performance.now() + 16), false, "关掉动效后不该再排帧");
   // 空格井的描边也是 stroke()，所以这里按**颜色**判，不能数调用次数
@@ -453,7 +502,7 @@ test("particlesEnabled 单独关掉：选框照画，粒子一颗不撒", () => 
   r.particlesEnabled = false;
   r.resize(400, 400, 4, 4);
 
-  r.playTurn({ mid: flip(BOARD, cell(2, 2)), after: BOARD, flips: [{ cell: cell(2, 2), role: "life" }] });
+  r.playTurn({ mid: flip(BOARD, cell(2, 2)), after: BOARD, flips: [{ cell: cell(2, 2), color: "life" }] });
   frame(performance.now() + 16);
 
   assert.ok(ctx.strokes.includes(PALETTE.life), "粒子关掉不该连选框一起关掉");
@@ -472,7 +521,7 @@ test("落子相时长可配：相位切换真的等到 flipMs 之后", () => {
   const mid = flip(BOARD, cell(2, 2));
   const after = lifeStep(mid, "bounded");
   const t0 = performance.now();
-  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] });
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), color: "life" }] });
 
   for (let i = 1; i <= 60; i++) frame(t0 + 16 * i); // ≈960ms，仍在落子相里
   assert.equal(
@@ -524,7 +573,7 @@ test("★ onPhase：落子相当场报，演化相要等到 flipMs 之后", () =
   const after = lifeStep(mid, "bounded");
   const phases: string[] = [];
   const t0 = performance.now();
-  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] }, (p) => phases.push(p));
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), color: "life" }] }, (p) => phases.push(p));
 
   assert.deepEqual(phases, ["flip"], "playTurn 当场就该报落子相 —— 那一帧的方块已经变了");
 
@@ -554,7 +603,7 @@ test("★ 被下一回合顶掉时，上一回合的演化相要**补报**（否
   const after = lifeStep(mid, "bounded");
   const phases: string[] = [];
   const t0 = performance.now();
-  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] }, (p) => phases.push(p));
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), color: "life" }] }, (p) => phases.push(p));
   assert.deepEqual(phases, ["flip"]);
 
   // 决策回得比动画快：演化还没到点，下一回合就开演了。`pending` 是**单个槽位**，
@@ -562,7 +611,7 @@ test("★ 被下一回合顶掉时，上一回合的演化相要**补报**（否
   // 记分板与态势图都挂在它上面，症状是图一个点都不再更新、画面却一切正常
   const mid2 = flip(after, cell(1, 1));
   const after2 = lifeStep(mid2, "bounded");
-  r.playTurn({ mid: mid2, after: after2, flips: [{ cell: cell(1, 1), role: "life" }] }, (p) =>
+  r.playTurn({ mid: mid2, after: after2, flips: [{ cell: cell(1, 1), color: "life" }] }, (p) =>
     phases.push(p),
   );
   assert.deepEqual(
@@ -586,7 +635,7 @@ test("★ 动效关掉时两相在同一帧落地，两次通知也当场发（�
   const mid = flip(BOARD, cell(2, 2));
   const after = lifeStep(mid, "bounded");
   const phases: string[] = [];
-  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] }, (p) => phases.push(p));
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), color: "life" }] }, (p) => phases.push(p));
 
   assert.deepEqual(phases, ["flip", "evolve"], "动效关掉时两相合并成一帧，通知也得补齐");
   assert.equal(frame(performance.now() + 16), false, "动效关掉后不该还排帧");
@@ -603,7 +652,7 @@ test("★ 动画被打断时**不会**报演化相 —— 那一帧的棋盘从�
   const after = lifeStep(mid, "bounded");
   const phases: string[] = [];
   const t0 = performance.now();
-  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] }, (p) => phases.push(p));
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), color: "life" }] }, (p) => phases.push(p));
   assert.deepEqual(phases, ["flip"]);
 
   // 半局中重开 / 恢复存档：直接落到另一副棋盘上，演化那一相被取消

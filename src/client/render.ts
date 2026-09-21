@@ -255,10 +255,41 @@ export function tweenVisual(v: CellVisual, k: number, kGlow: number = k): boolea
 
 /* ═══════════ 目标值的规划 ═══════════ */
 
-/** 一次落子：哪一格、被谁翻的。角色只用来挑颜色 */
+/**
+ * 一次落子：哪一格，以及**用哪个颜色演它**。
+ *
+ * ⚠ `color` **不是「谁翻的」**，而是「这一手会把它变成什么」：
+ * 翻死格 → 绿（让它活），翻活格 → 红（让它死）。它只用于取色
+ * （`palette[color]`），与任何角色语义无关。
+ *
+ * 双人局里这两种说法**恰好一致**（生之执只能翻死格、死之执只能翻活格），
+ * 所以这个字段从前叫 `role` 也从没出过问题。**单人局里行动方生死一体、
+ * 两种都能翻**，两者就此分家 —— 症状是「玩家翻活格时选框与粒子还是绿的」，
+ * 看起来像渲染坏了，根因是把「谁」当成了「做什么」。
+ *
+ * 与 `chart.ts` 的 `buildHeat` 是同一条判据：那张图也按格子当前生死取色，
+ * 于是热力图的红绿与棋盘动画的红绿说的是同一件事。
+ */
 export interface FlipAnim {
   readonly cell: Cell;
-  readonly role: Role;
+  readonly color: Role;
+}
+
+/**
+ * 这一手会把它变成什么 → **用哪个颜色演它**。
+ *
+ * 翻死格 = 让它活 → `"life"`（绿）；翻活格 = 让它死 → `"death"`（红）。
+ * 传的是**翻转之前**那一副棋盘。
+ *
+ * ⚠ 双人局里「谁在翻」与「把它变成什么」**恰好一一对应**，所以按角色取色
+ * 从没出过问题；单人局里行动方生死一体、两种都能翻，两者才分家。单独抽成
+ * 一个函数是为了它能被无头断言 —— 这一行取错没有任何测试背书，而症状
+ * （玩家把活格翻死却闪绿光）看起来像渲染坏了，不像取色错了。
+ *
+ * 与 `chart.ts` 的 `buildHeat` 是同一条判据：那张图也按格子当前生死取色。
+ */
+export function flipColor(before: Board, cell: Cell): Role {
+  return before.cells[cell] ? "death" : "life";
 }
 
 /** 一格在本次同步里要做的事。三种对应三种动画，见 `planCells` */
@@ -285,6 +316,20 @@ export type CellPlan =
       readonly kind: "fade";
       /** 淡出时的收缩目标。落子翻死是 0（与 0→1 对称），演化死亡是 0.86 */
       readonly toScale: number;
+      /**
+       * 落子方（要挂发光选框）。null = 不挂。
+       *
+       * ★ **翻死的那一手同样要挂框。** 规格（`docs/ui-spec.md`：落子一节）
+       * 写的是「**任一行动方**翻转一格 ⟹ 外加发光选框淡出 —— 生之执绿、
+       * 死之执**红**」。而这一支从前整个不发选框（只有 `spawn` / `update`
+       * 会发），于是死之执的落子在双人局里从来没有红框 ——
+       * **单人局里更是只剩绿框**（行动方生死一体、两种都能翻，而只有
+       * 「翻活」那一半会亮），看起来正像渲染坏了。
+       *
+       * 演化杀死格子时是 null（那一格不在 `flips` 里，本来就没有行动方）——
+       * 规格：「迭代 …… 不带发光选框」
+       */
+      readonly glow: Role | null;
     };
 
 /**
@@ -334,7 +379,9 @@ export function planCells(
       }
     } else if (present.has(i)) {
       // 被落子翻死：缩到没有（与 0 → 1 对称）；被演化杀死：2048 那套 0.86
-      plan.set(i, { kind: "fade", toScale: flipped ? 0 : 0.86 });
+      // 选框按「有没有行动方」给，与 `spawn` / `update` 同一判据 ——
+      // 演化杀死时 `role` 必然是 null（那一格不在 `flips` 里）
+      plan.set(i, { kind: "fade", toScale: flipped ? 0 : 0.86, glow: animate ? role : null });
     }
   }
 
@@ -600,12 +647,12 @@ export class BoardRenderer {
     this.flushPendingEvolve();
 
     const flips = new Map<Cell, Role | null>();
-    for (const f of anim.flips) flips.set(f.cell, f.role);
+    for (const f of anim.flips) flips.set(f.cell, f.color);
     this.applyBoard(anim.mid, flips);
     onPhase?.("flip");
 
     if (this.animations && this.particlesEnabled) {
-      for (const f of anim.flips) this.burst(f.cell, this.palette[f.role]);
+      for (const f of anim.flips) this.burst(f.cell, this.palette[f.color]);
     }
 
     if (!this.animations) {
@@ -698,14 +745,17 @@ export class BoardRenderer {
       }
       const v = this.visuals.get(cell);
       if (!v) continue;
+      // ★ 选框对 `update` 与 `fade` **一视同仁**：它回答的是「这一手是谁下的」，
+      // 而「把活格翻死」同样是一手。从前它只挂在 `update` 上，于是死之执
+      // 的落子从来没有红框（见 `CellPlan` 的 fade 那条注释）
+      if (p.glow) {
+        v.glow = 1;
+        v.tGlow = 0;
+        v.glowColor = this.palette[p.glow];
+      }
       if (p.kind === "update") {
         v.tScale = 1;
         v.tAlpha = 1;
-        if (p.glow) {
-          v.glow = 1;
-          v.tGlow = 0;
-          v.glowColor = this.palette[p.glow];
-        }
       } else {
         v.tAlpha = 0;
         v.tScale = p.toScale;
