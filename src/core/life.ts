@@ -155,3 +155,92 @@ export function referenceStep(b: Board, topo: Topology): Board {
   }
   return { cols, rows, cells: next };
 }
+
+/**
+ * 位并行的 B3/S23（每格占 4 bit，整行打包进一个 BigInt）。
+ *
+ * 为什么是 4 bit：一个格子最多有 8 个活邻居，8 = 0b1000 需要 4 位才放得下，
+ * 这样 8 个邻居直接**相加**就不会进位串到隔壁格子 —— 位平面因此能一次算完整行。
+ *
+ * 为什么选位并行：torus 的水平环绕在位表示下就是一次循环移位，
+ * 朴素实现则要为每个边界格子写分支。
+ * （它在这个棋盘尺寸下未必更快 —— 见 T6 的基准测试，由数据说话。）
+ */
+export function lifeStep(b: Board, topo: Topology): Board {
+  const { cols, rows, cells } = b;
+  const width = BigInt(4 * cols);
+  const FRAME = (1n << width) - 1n;
+
+  // 每个 nibble 的四个位平面掩码
+  let m0 = 0n;
+  let m1 = 0n;
+  let m2 = 0n;
+  let m3 = 0n;
+  for (let c = 0; c < cols; c++) {
+    const s = BigInt(4 * c);
+    m0 |= 1n << s;
+    m1 |= 1n << (s + 1n);
+    m2 |= 1n << (s + 2n);
+    m3 |= 1n << (s + 3n);
+  }
+
+  const packed: bigint[] = [];
+  for (let r = 0; r < rows; r++) {
+    let x = 0n;
+    const base = r * cols;
+    for (let c = 0; c < cols; c++) if (cells[base + c]) x |= 1n << BigInt(4 * c);
+    packed.push(x);
+  }
+
+  const wrap = BigInt(4 * (cols - 1));
+  const rollL = (x: bigint): bigint => {
+    const top = (x >> wrap) & 0xfn;
+    return ((x << 4n) | top) & FRAME;
+  };
+  const rollR = (x: bigint): bigint => {
+    const bot = x & 0xfn;
+    return (x >> 4n) | (bot << wrap);
+  };
+  const shlL = (x: bigint): bigint => (topo === "torus" ? rollL(x) : (x << 4n) & FRAME);
+  const shlR = (x: bigint): bigint => (topo === "torus" ? rollR(x) : x >> 4n);
+
+  const rowAt = (r: number): bigint => {
+    if (r < 0 || r >= rows) return topo === "torus" ? packed[(r + rows) % rows] : 0n;
+    return packed[r];
+  };
+
+  const out = new Uint8Array(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    const mid = packed[r];
+    const up = rowAt(r - 1);
+    const dn = rowAt(r + 1);
+
+    // 8 个邻居相加。每个 nibble 的值落在 0..8，不会进位到相邻 nibble。
+    const sum = shlL(up) + up + shlR(up) + shlL(mid) + shlR(mid) + shlL(dn) + dn + shlR(dn);
+
+    // 把四个位平面全部对齐到 nibble 的最低位（4c），才能逐格做条件判断
+    const b0 = sum & m0;
+    const b1 = (sum & m1) >> 1n;
+    const b2 = (sum & m2) >> 2n;
+    const b3 = (sum & m3) >> 3n;
+
+    const alive = mid & m0;
+    // BigInt 的 ~ 是无限位的，直接用会跑到 frame 之外；取反一律在 m0 掩码内做
+    const zero = (x: bigint): bigint => m0 ^ x;
+
+    // 恰好 3 个邻居：0011
+    const n3 = b0 & b1 & zero(b2) & zero(b3);
+    // 恰好 2 个邻居：0010
+    const n2 = b1 & zero(b0) & zero(b2) & zero(b3);
+
+    // 活细胞存活（2 或 3），死细胞诞生（恰好 3）
+    const next = (alive & (n2 | n3)) | (zero(alive) & n3);
+
+    const base = r * cols;
+    for (let c = 0; c < cols; c++) {
+      if ((next >> BigInt(4 * c)) & 1n) out[base + c] = 1;
+    }
+  }
+
+  return { cols, rows, cells: out };
+}
