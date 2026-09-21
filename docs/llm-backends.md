@@ -8,6 +8,58 @@
 
 ---
 
+## 零、还缺的两条：用户自备 key 的 LLM 后端
+
+**现状**：`BACKENDS` 里有七条，其中与 LLM 有关的只有一条 —— `llmfree`
+（「LLM 免费试用 1」），而且它是**代管**的：端与模型由服务端定，
+broker 翻译也在服务端做。
+
+**缺的是**：用户**自备 base URL / key / model** 的
+**「OpenAI 兼容」**与**「Anthropic 兼容」**两条。用户手里有 DeepSeek 这类 key，
+而今天没有地方填。
+
+### ★ 这条带来的架构变化：broker 必须能在**客户端**跑
+
+代管那条约定的路径是「客户端只发 Jev 形状 → 服务端翻译 → 上游」。
+**用户自备 key 的没有那层服务端**（GitHub Pages 上更是连 Serverless 都没有），
+所以**翻译必须发生在浏览器里**。
+
+好在 `src/shared/llm-broker.ts` 本来就是纯函数、不碰 DOM 也不碰网络 ✓ ——
+它可以在两边跑。`DecisionBackend.kind` 里预留的 `"llm-json"` / `"llm-tool"`
+正是给这两条用的。
+
+### 两种协议的形状差异（实测数据见第五节，别凭印象写）
+
+| | OpenAI 兼容 | **Anthropic 兼容** |
+|---|---|---|
+| 路径 | `POST {base}/chat/completions` | `POST {base}/messages` |
+| 认证头 | `Authorization: Bearer KEY` | **`x-api-key: KEY`** |
+| 版本头 | — | **`anthropic-version: 2023-06-01`** |
+| 系统提示 | `messages[0].role = "system"` | **顶层 `system` 参数**，不在 messages 里 |
+| 输出上限 | `max_tokens` | `max_tokens`（**必填**） |
+| 回包正文 | `choices[0].message.content` | **`content[]` 数组，取 `type === "text"` 那一段** |
+| 回包结束原因 | `choices[0].finish_reason` | **`stop_reason`** |
+| 用量 | `usage.prompt_tokens` / `completion_tokens` | **`usage.input_tokens` / `output_tokens`** |
+| 推理 token | `usage.completion_tokens_details.reasoning_tokens` | 见下 |
+| 工具调用 | `tools` + `tool_choice: "auto"` | `tools` + `tool_choice: {type:"auto"}`，回包是 `content[]` 里的 `tool_use` 块 |
+
+> ⚠ **上表里 Anthropic 那列是「按协议文档推断」还是「实测」要分清。**
+> 实现时**必须用真 key 各打一次**确认真实形状 —— 本项目的教训是
+> `noul`/`boolean` 那次「文档说一套、网关做一套」，而四家网关里只有一家是异类。
+> **不要在注释里写成已实测。**
+
+### 其余要求
+
+1. 两条都 `needsKey: true` / `managed: false` —— base URL 与 model 由用户填，
+   **界面不能禁用模型输入**（那是代管才有的行为）
+2. 两条都要支持**调用策略**（JSON / 工具循环）与**思考强度**（走同一套能力表）
+3. ⚠ **CORS**：浏览器直连供应商可能被 CORS 拦下。**失败要报得清楚**
+   （现在若不处理，会表现成 `fetch failed` —— 与「模型没答」长得一样）。
+   Anthropic 官方 API 还需要一个额外的头才允许浏览器直连，这一点要查清并写进提示
+4. 密钥**只在浏览器内存里**（这两条不经过服务端），**绝不落盘、绝不进日志**
+
+---
+
 ## 一、要建的是什么
 
 `DESIGN.md` 第八节那条四层架构里，**中间两层还没建**：
