@@ -2052,6 +2052,80 @@ Jev 的结构（无搜索、无记忆、逐回合独立判断）让它更依赖 
 
 ---
 
+## LLM 对照后端的实测档案（agnes-ai flash）
+
+**这是一次快速侦察，不是严谨测量** —— 下面的延迟都是单次采样，只够定性，不够下结论。
+
+### 接入信息
+
+| 项 | 值 |
+|---|---|
+| Base | `https://apihub.agnes-ai.com/v1` |
+| OpenAI 兼容 | `POST /chat/completions` ✓ |
+| Anthropic 兼容 | `POST /messages`（**同一个 host，不是"改改才能试出来"**） ✓ |
+| 密钥 | `../local/agens-flash-secret-api-key`（51 字符） |
+| 额度 | 无账户额度，**仅 flash 系列免费** |
+| 文本类 flash | `agnes-3.0-flash` / `agnes-2.5-flash` / `agnes-2.0-flash` |
+
+### ★ 它们是**推理模型**，这直接决定适配器怎么写
+
+普通对话回包长这样：
+
+```json
+{
+  "content": "\n\n收到",
+  "reasoning_content": "用户要求我回复"收到"。这是一个简单的确认性回复…",
+  "usage": {
+    "completion_tokens": 71,
+    "completion_tokens_details": { "reasoning_tokens": 68, "text_tokens": 3 }
+  }
+}
+```
+
+**踩到的坑**：`max_tokens: 20` 时 20 个 token 全被思维链吃掉，`content` 返回**空字符串**、`finish_reason: "length"` —— HTTP 200，看起来像成功，实际什么都没答。
+
+> **适配器硬性要求**：`max_tokens` 必须给足推理预算，且**不能把 `content` 为空当成正常回包**。要检查 `finish_reason === "length"` 并当作失败重试或报错。
+>
+> 这又是一次「HTTP 200 + 空结果」的静默失败 —— 与源仓库那三次扫密钥漏检是同一个母题的实例：**看起来成功了，其实是空的。**
+>
+> 另外 `reasoning_tokens` 要单独记账。跨模型比成本时把它算进去，否则会低估推理模型的真实开销。
+
+### 实测延迟（单次采样，仅定性）
+
+| 模型 | 请求 | 耗时 |
+|---|---|---|
+| `agnes-3.0-flash` | "Say OK" | **141.7 s** |
+| `agnes-3.0-flash` | "回复：收到" | **28.4 s** |
+| `agnes-2.5-flash` | 同上 | **0.55–0.72 s** |
+| `agnes-2.0-flash` | 同上 | **1.65 s** |
+| `agnes-2.5-flash` | JSON 输出 | 1.67 s |
+| `agnes-2.5-flash` | 工具调用 | 1.62 s |
+
+**3.0-flash 比 2.5-flash 慢 40–250 倍。** 这不是网络问题，是思维链长度差异。对我们的用处：
+
+- **日常对照用 `agnes-2.5-flash`**（快、免费、能力够）
+- **`agnes-3.0-flash` 本身就是一个有价值的被测量对象** —— 它演示了「推理模型的延迟方差能有多大」，而这正是项目要测的东西
+
+### 能力确认
+
+| 能力 | 结论 |
+|---|---|
+| `response_format: {type:"json_object"}` | ✓ 可用，回包 `{"p": 0.5}` |
+| `tools` + `tool_choice` | ✓ 可用，`tool_calls` 正常返回 |
+| 工具参数正确性 | ⚠ 首测把「翻转(3,4)」解析成了 `key="翻转", value=34` —— **是提示词问题不是能力问题**，tool schema 的 description 要写清楚 |
+
+### 一个会让成本估算失真的细节
+
+trivial prompt 的 `prompt_tokens` 是 **287**，其中 `cached_tokens: 256`。也就是说**每次调用有个不小的固定开销**。工具循环模式下 64 次调用 = 64 × 最低 prompt 开销 —— 这正是「Jev 一次调用答完 64 题」要对比的东西，记账时不要漏掉。
+
+### 顺带发现：`../local/` 那两条 `.gitignore` 规则是**空转的**
+
+两个仓库的 `.gitignore` 里都写了 `../local/`。但 **gitignore 的规则无法逃出仓库根目录**，`git check-ignore` 的回应是「outside repository」。密钥真正的保护来自它**物理上位于两个仓库之外**，而不是那条规则。
+
+所以：**保护是有效的（git 够不到），但那两条规则给的是虚假的安全感。** 若哪天有人把 `local/` 挪进仓库内，那两条 `../local/` 不会生效 —— 好在 `.gitignore` 里另有 `local/` 与 `*-secret-api-key*` 两条能兜住。新增密钥时必须确认**确实有一条能命中的规则**，不能只看"我写过一条"。
+
+---
+
 ## 多提供商对照：把 Jev 的并行决策放进对照实验
 
 **用户的提议**：加入 Anthropic / OpenAI 兼容 API，把「答题」适配成两种形态——
