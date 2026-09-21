@@ -738,12 +738,21 @@ test("bounded 与 torus 在同样输入下给出不同结果", () => {
   );
 });
 
-test("torus：单行活细胞横向环绕成环", () => {
-  // 整行全活不是有效测试；用两个活细胞隔一列，环绕后它们成为相邻
-  const b = boardFromRows([".#.#", "....", "....", "...."]);
-  const n = referenceStep(b, "torus");
-  // 环绕后 (0,0) 与 (0,3) 相邻，(0,1) 与 (0,2) 相邻，四个格子各有两个水平邻居
-  assert.ok(aliveCount(n) > 0, "环绕拓扑下应有细胞存活");
+test("torus：跨越左右接缝的方块仍是方块", () => {
+  // 左右两列各一个竖对：bounded 下是两条互不相邻的竖格 → 一代全灭；
+  // torus 下 (0,0) 与 (0,3) 相邻、(1,0) 与 (1,3) 相邻，四格构成真正的 2×2 方块。
+  // 方块是静物，所以必须**连跑三代逐代不变** —— 这条同时锁住环绕方向
+  // 与「静物在环绕下仍是静物」两件事。
+  const b = boardFromRows(["#..#", "#..#", "....", "...."]);
+
+  const bounded = referenceStep(b, "bounded");
+  assert.equal(aliveCount(bounded), 0, "bounded 下这两条竖格互不相邻，应当全灭");
+
+  let cur = b;
+  for (let i = 0; i < 3; i++) {
+    cur = referenceStep(cur, "torus");
+    assert.deepEqual(toRows(cur), toRows(b), `torus 第 ${i + 1} 代：环绕后的方块应当是静物`);
+  }
 });
 
 test("referenceStep 是纯函数", () => {
@@ -1082,14 +1091,32 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { boardFromRows, boardKey, classifyTermination, lifeStep, legalCells, flip } from "../core/life.js";
-import type { GameRules } from "../core/types.js";
+import type { Board, GameRules } from "../core/types.js";
 
+/**
+ * 胜负判定已从「累计净增长的绝对阈值」改为「生死比例的界限 + 防抖」。
+ *
+ * 为什么换：绝对格数换个棋盘尺寸就不可比 —— 设计文档的开局是 14 个活细胞，
+ * 在 8×8（64 格）上是 21.9%，在 16×16（256 格）上只有 5.5%。逼得每个尺寸
+ * 都要单独标定一整套阈值。比例天然跨尺寸可比，那个麻烦基本消失。
+ *
+ * 净增长没有消失 —— 它不再决定胜负，但仍然是跑分 CSV 里记录的一项统计。
+ *
+ * ⚠ 注意 21.9% 这个数：设计文档的开局离「20% 死之执获胜」只差 1.9 个百分点。
+ *   具体阈值怎么定要等 T13 跑分出来才谈得上标定，现在这些值全部是占位。
+ */
 const rules: GameRules = {
   turnLimit: 90,
-  netGrowthThreshold: 22,
-  minAlive: 2,
-  maxAlive: 51,
+  lifeWinRatio: 0.6,      // 活细胞占比 ≥ 60% 且连续保持 lifeStreak 回合 → 生之执胜
+  deathWinRatio: 0.2,     // ≤ 20% 且连续保持 deathStreak 回合 → 死之执胜
+  lifeStreak: 3,          // 防抖：只越界一代不算赢
+  deathStreak: 3,
 };
+
+/** 造快照；ratioHistory 从最早到最近排列 */
+function snap(board: Board, turn: number, ratioHistory: number[]) {
+  return { board, turn, ratioHistory };
+}
 
 // ⚠ 所有夹具都必须 ≥ MIN_SIZE(4)。T3 实测：计划初稿用了 2×2 棋盘，
 //    结果每个用例都先撞在 assertSize 上，测的根本不是被测函数。
@@ -1110,21 +1137,92 @@ test("boardKey 含尺寸，尺寸不同的棋盘不会撞 key", () => {
   assert.notEqual(boardKey(four), boardKey(five), "4×4 与 5×5 的全死棋盘撞了 key —— key 没带尺寸");
 });
 
-test("活细胞降到 minAlive 及以下时终局", () => {
-  const b = boardFromRows(["....", ".#..", "....", "...."]);   // 1 个活细胞
-  assert.deepEqual(classifyTermination(b, "life", rules, 10, new Set()), { reason: "minAlive" });
-});
+/* ═══ 胜负线：比例 + 防抖 ═══
+   防抖的用途是挡住「一代走运就赢」—— 生命游戏是混沌的，单代涨落很大。 */
 
-test("活细胞升到 maxAlive 及以上时终局", () => {
-  const rows = Array(8).fill("########");
-  rows[7] = "#######.";                                        // 63 格 > maxAlive 51
-  const b = boardFromRows(rows);
-  assert.deepEqual(classifyTermination(b, "death", rules, 10, new Set()), { reason: "maxAlive" });
-});
-
-test("达到回合上限时终局", () => {
+test("单次越界不足以判赢 —— 防抖生效", () => {
   const b = boardFromRows([".##.", ".##.", "....", "...."]);
-  assert.deepEqual(classifyTermination(b, "life", rules, 90, new Set()), { reason: "turnLimit" });
+  // 最近一回合 0.7 ≥ 0.6，但只持续了 1 回合，lifeStreak 是 3
+  assert.equal(classifyTermination(snap(b, 10, [0.3, 0.7]), "life", rules, new Set()), null);
+});
+
+test("连续越界达到 lifeStreak 回合，生之执获胜", () => {
+  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  assert.deepEqual(
+    classifyTermination(snap(b, 10, [0.3, 0.7, 0.7, 0.7]), "life", rules, new Set()),
+    { reason: "lifeWinRatio", winner: "life" },
+  );
+});
+
+test("连续被打断则重新计数", () => {
+  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  // 末尾是 0.7 0.7，只连续 2 回合
+  assert.equal(
+    classifyTermination(snap(b, 10, [0.7, 0.7, 0.3, 0.7, 0.7]), "life", rules, new Set()),
+    null,
+  );
+});
+
+test("死之执侧同理，且两侧阈值与防抖长度可以不同", () => {
+  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  assert.equal(
+    classifyTermination(snap(b, 10, [0.3, 0.1, 0.1]), "death", rules, new Set()), null,
+    "只连续 2 回合，防抖未满",
+  );
+  assert.deepEqual(
+    classifyTermination(snap(b, 10, [0.3, 0.1, 0.1, 0.1]), "death", rules, new Set()),
+    { reason: "deathWinRatio", winner: "death" },
+  );
+});
+
+test("到回合上限仍未越界 → 和局", () => {
+  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  assert.deepEqual(
+    classifyTermination(snap(b, 90, [0.25, 0.25]), "life", rules, new Set()),
+    { reason: "turnLimit", winner: null },
+  );
+});
+
+test("胜负线优先于回合上限 —— 同一回合两者都满足时判胜负", () => {
+  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  assert.deepEqual(
+    classifyTermination(snap(b, 90, [0.7, 0.7, 0.7]), "life", rules, new Set()),
+    { reason: "lifeWinRatio", winner: "life" },
+    "两者同时满足时应判胜负，而不是和局",
+  );
+});
+
+/* ═══ 走投无路 ═══
+   注意这是两种不同的情况，不能合并：
+   - noLegalCell：该角色的可翻集合本身就是空的（全死 → 死执无处可翻）
+   - repeatBlocked：可翻集合非空，但每一格翻完演化一代都会落回见过的局面 */
+
+test("棋盘全死时，死之执无格可翻 —— 此时按占比判死之执胜", () => {
+  const b = boardFromRows(["....", "....", "....", "...."]);
+  // 占比 0 ≤ deathWinRatio，防抖未满本来不该判赢；
+  // 但游戏因为「无棋可走」而终止，此时直接按占比定胜负（见下方的规则说明）
+  assert.deepEqual(
+    classifyTermination(snap(b, 5, [0]), "death", rules, new Set()),
+    { reason: "noLegalCell", winner: "death" },
+  );
+});
+
+test("棋盘全活时，生之执无格可翻 —— 此时按占比判生之执胜", () => {
+  const b = boardFromRows(["####", "####", "####", "####"]);
+  assert.deepEqual(
+    classifyTermination(snap(b, 5, [1]), "life", rules, new Set()),
+    { reason: "noLegalCell", winner: "life" },
+  );
+});
+
+test("无棋可走但占比在两条线之间 → 和局", () => {
+  const b = boardFromRows(["....", "....", "....", "...."]);
+  // 占比 0.4：既不到 0.6，也不低于 0.2
+  assert.deepEqual(
+    classifyTermination(snap(b, 5, [0.4]), "death", rules, new Set()),
+    { reason: "noLegalCell", winner: null },
+    "占比夹在两条线之间时不该硬判一个胜方",
+  );
 });
 
 /*
@@ -1137,17 +1235,23 @@ test("达到回合上限时终局", () => {
  *
  * 所以这里直接给定一个「已包含全部后继」的 seen，验证规则按预期裁决。
  */
-test("所有候选落点都会导致重复时，判 repeatBlocked", () => {
-  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+/** 夹具：4×4，4 个活细胞 → 占比 0.25，夹在 0.2 与 0.6 之间 */
+const STUCK_BOARD = () => boardFromRows([".##.", ".##.", "....", "...."]);
+
+test("所有候选落点都会导致重复时，判 repeatBlocked（占比居中 → 和局）", () => {
+  const b = STUCK_BOARD();
   const seen = new Set([boardKey(b)]);
   for (const cell of legalCells(b, "life")) {
     seen.add(boardKey(lifeStep(flip(b, cell), "bounded")));
   }
-  assert.deepEqual(classifyTermination(b, "life", rules, 10, seen), { reason: "repeatBlocked" });
+  assert.deepEqual(
+    classifyTermination(snap(b, 10, [0.25]), "life", rules, seen),
+    { reason: "repeatBlocked", winner: null },
+  );
 });
 
 test("只要还有一个候选能产生新状态，就不该判 repeatBlocked", () => {
-  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  const b = STUCK_BOARD();
   const all = legalCells(b, "life");
   assert.ok(all.length > 1, "这个夹具需要至少两个候选才有意义");
   // 只把「除第一个之外」的后继塞进 seen —— 第一个仍能产生新状态
@@ -1155,31 +1259,40 @@ test("只要还有一个候选能产生新状态，就不该判 repeatBlocked", 
   for (const cell of all.slice(1)) {
     seen.add(boardKey(lifeStep(flip(b, cell), "bounded")));
   }
-  assert.equal(classifyTermination(b, "life", rules, 10, seen), null);
+  assert.equal(classifyTermination(snap(b, 10, [0.25]), "life", rules, seen), null);
 });
 
 test("两个角色的合法集不同，repeatBlocked 必须按角色分别判定", () => {
   // 同一份 seen 下，一方可能走投无路而另一方还有路
-  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  const b = STUCK_BOARD();
   const seenForLife = new Set([boardKey(b)]);
   for (const cell of legalCells(b, "life")) {
     seenForLife.add(boardKey(lifeStep(flip(b, cell), "bounded")));
   }
-  // 死之执要翻活格，它的后继和生之执不同
+  // 死之执要翻活格，它的后继和生之执不同 —— 这份 seen 里没有它自己的后继，
+  // 所以死之执不该被判 repeatBlocked
   const seenForDeath = new Set([boardKey(b)]);
   for (const cell of legalCells(b, "death")) {
     seenForDeath.add(boardKey(lifeStep(flip(b, cell), "bounded")));
   }
-  // 两者用各自的 seen 判定，互不干扰
-  assert.deepEqual(classifyTermination(b, "life", rules, 10, seenForLife), { reason: "repeatBlocked" });
-  assert.deepEqual(classifyTermination(b, "death", rules, 10, seenForDeath), { reason: "repeatBlocked" });
+  assert.deepEqual(
+    classifyTermination(snap(b, 10, [0.25]), "life", rules, seenForLife),
+    { reason: "repeatBlocked", winner: null },
+  );
+  assert.equal(
+    classifyTermination(snap(b, 10, [0.25]), "death", rules, seenForLife),
+    null,
+    "死之执自己的后继不在 seen 里，不该被判走投无路",
+  );
 });
 
 test("终局判定不改动入参", () => {
-  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  const b = STUCK_BOARD();
+  const ratios = [0.25, 0.25];
   const before = Array.from(b.cells);
-  classifyTermination(b, "life", rules, 10, new Set());
+  classifyTermination(snap(b, 10, ratios), "life", rules, new Set());
   assert.deepEqual(Array.from(b.cells), before);
+  assert.deepEqual(ratios, [0.25, 0.25], "ratioHistory 被改动了");
 });
 ```
 
@@ -1199,9 +1312,57 @@ export function boardKey(b: Board): string {
 }
 ```
 
-`classifyTermination(b, rules, turn, seen)` 的判定顺序**有讲究**：先查立即终局条件（minAlive / maxAlive），再查回合上限，最后查重复。顺序影响原因归属，必须固定并写进注释。
+**类型定义**（放 `src/core/types.ts`）：
 
-`repeatBlocked` 的语义：**当前行动方没有任何一格能翻**（每一格翻完演化一代后都会落进 `seen`）。注意这是**对某一方**成立——生执和死执的合法集不同，可能一方走投无路而另一方还有路。所以实际签名是 `classifyTermination(b, role, rules, turn, seen)`，**加 `role` 参数**。
+```ts
+export interface GameRules {
+  /** 回合上限。到上限仍未分出胜负 → 和局 */
+  readonly turnLimit: number;
+  /** 活细胞占比 ≥ 此值，且**连续**保持 lifeStreak 回合 → 生之执获胜 */
+  readonly lifeWinRatio: number;
+  /** ≤ 此值且连续保持 deathStreak 回合 → 死之执获胜 */
+  readonly deathWinRatio: number;
+  /** 防抖：连续越界多少回合才算赢。两侧分开，因为博弈本身不对称 */
+  readonly lifeStreak: number;
+  readonly deathStreak: number;
+}
+
+export type TerminationReason =
+  | "lifeWinRatio"
+  | "deathWinRatio"
+  | "turnLimit"
+  | "noLegalCell"    // 该角色的可翻集合本身就是空的
+  | "repeatBlocked"; // 可翻集合非空，但每一格翻完都会落回见过的局面
+
+export interface Termination {
+  readonly reason: TerminationReason;
+  readonly winner: Role | null;   // null = 和局
+}
+
+/** 终局判定需要的不只是当前棋盘 —— 防抖要用到占比历史 */
+export interface GameSnapshot {
+  readonly board: Board;
+  readonly turn: number;
+  /** 从最早到最近排列的「活细胞占比」，长度 = 已进行的回合数 */
+  readonly ratioHistory: readonly number[];
+}
+```
+
+`classifyTermination(snap, role, rules, seen): Termination | null`。
+
+**判定顺序有讲究，必须固定并写进注释**：
+
+1. **连续越界 ≥ 该侧 streak** → 判该方胜。放第一位，因为这是玩家主动争取的目标
+2. **当前行动方无合法动作**（`noLegalCell` 或 `repeatBlocked`）→ **按当前占比定胜负**：≥ `lifeWinRatio` 判生执胜，≤ `deathWinRatio` 判死执胜，**夹在中间则和局**
+3. **回合上限** → 和局
+
+第 2 条那半句「按当前占比定胜负」是我替你定的，规则族里没写。理由：防抖的作用是**挡住一代走运就赢**，而游戏既然已经因为别的原因要结束了，再卡防抖只会出现「棋盘全活、生之执却因为只持续了一代而判和局」这种明显说不通的结果。不同意就改成一律和局。
+
+`repeatBlocked` 的语义：**当前行动方没有任何一格能翻**。这是**对某一方**成立的——生执和死执的合法集不同，一方走投无路时另一方可能还有路。所以 `role` 参数必不可少，`seen` 也必须按角色分别构造。
+
+注意 `noLegalCell` 与 `repeatBlocked` **不能合并**：前者是可翻集合本身为空（棋盘全死时死执无处可翻），后者是集合非空但全部会落回见过的局面。两者都可能独立发生。
+
+**净增长去哪了**：它不再决定胜负，但**仍然是跑分 CSV 里记录的一项统计**。别把它从 `TurnRecord` 里删掉。
 
 **Step 5: Commit**
 
@@ -1294,41 +1455,41 @@ export function detectPatterns(b: Board): DetectedPattern[];
 **Step 1: 定义**
 
 ```ts
-import type { Board, Topology } from "./types.js";
-
-export interface GameRules {
-  /** 回合上限 */
-  readonly turnLimit: number;
-  /** 生之执获胜所需的累计净增长 */
-  readonly netGrowthThreshold: number;
-  /** 活细胞数 ≤ 此值时立即终局 */
-  readonly minAlive: number;
-  /** 活细胞数 ≥ 此值时立即终局 */
-  readonly maxAlive: number;
-}
+import type { Board, GameRules, Topology } from "./types.js";
 
 export interface SizePreset {
   readonly cols: number;
   readonly rows: number;
-  readonly opening: readonly string[];   // 开局局面，'.' / '#'
-  readonly rules: GameRules;
+  /** 该尺寸下可选的若干开局。开局本身是被测量的变量，一个尺寸只给一种等于把变量钉死 */
+  readonly openings: readonly Opening[];
+  readonly rules: GameRules;   // 定义在 types.ts，见 T7
   readonly defaultTopology: Topology;
   /** 参数是否经过跑分标定。未标定的预设界面上必须显式标注 */
   readonly calibrated: boolean;
 }
 ```
 
-**Step 2: 8×8 用设计文档 12.2 的值**
+**Step 2: 8×8 的默认值**
 
 ```ts
 {
   cols: 8, rows: 8,
-  opening: [ /* 1 个方块 + 1 个滑翔机，共 14 活细胞 —— 具体坐标见设计文档 12.2 */ ],
-  rules: { turnLimit: 90, netGrowthThreshold: 22, minAlive: 2, maxAlive: 51 },
+  openings: [ /* 见 Step 4 与 Step 5 */ ],
+  rules: {
+    turnLimit: 90,
+    lifeWinRatio: 0.6,
+    deathWinRatio: 0.2,
+    lifeStreak: 3,
+    deathStreak: 3,
+  },
   defaultTopology: "bounded",
-  calibrated: true,
+  calibrated: false,   // ← 注意是 false
 }
 ```
+
+**为什么 `calibrated: false` 而不是像设计文档那样标成已定**：`turnLimit: 90` 确实来自设计文档 12.2，但**胜负判定的整套机制换掉了**（从「累计净增长 > 22」换成「比例界限 + 防抖」），设计文档那套参数对新机制不再适用。比例、防抖长度这套值现在全部是占位，等 T13 的跑分出来才谈得上标定。
+
+**一个必须留意的数**：设计文档的开局是 14 个活细胞，在 8×8（64 格）上就是 **21.9%** —— 离「≤20% 死之执获胜」只差 1.9 个百分点。防抖在这里不是可选的装饰，它在开局阶段就在承压。
 
 **Step 3: 其余尺寸留未标定标记**
 
@@ -1662,7 +1823,26 @@ node tools/play.ts --size 6x6 --turns 10
 
 **配色**：深色底 + 白色活细胞。
 
-**新的可视化机会**：`noul-all` 会返回 N² 个概率，**直接画成棋盘热力图**。2048 只有 4 个概率，只能退而画 `chart.ts` 的带状面积图；生命棋可以把概率画在对应格子上。
+**三张图**（`chart.ts` 的 `ConfidenceChart` 骨架可复用，但仍要改造）：
+
+**① Jev 决策的历史置信度** —— 沿用 2048 的带状面积图（top / bottom / median 三标量）。
+双人对弈模式下**两组合并进同一张图**：
+
+- 生之执的面积用**绿**，死之执的用**红**
+- 两块面积的**交集区域渲染成黄色**
+- 中值折线各跟随各自玩家的颜色
+
+**② 生死比例统一面积图** —— 新增，放在 ① 的**下方**（它是游戏的客观状态，不是模型的输出）。
+
+- 纵轴是活细胞占比 0~1，0.5 处是一条**中线**
+- 中线**以上**填充**绿**（生之执占优），中线**以下**填充**红**（死之执占优），颜色分明
+- 曲线与中线之间围成的面积即「优势面积」
+- **中线本身的描边带渐变**：自下而上 红 → 黄 → 绿，跟随具体比例变化
+- **单人模式原封不动保留** —— 纯生执模式下它同样有信息量
+
+> ② 那句「中线的渐变」我是按「描边沿自身做垂直渐变」理解的。你的原话里「下生绿上死红」与「越上越绿越下越红」两句互斥，我按前者定了**填充**、按后者定了**中线渐变**。做的时候看实物再敲一次 —— 这类视觉细节靠文字描述容易失真。
+
+**③ 棋盘热力图**：`noul-all` 会返回 N² 个概率，**直接画在对应格子上**（透明度或色调）。2048 只有 4 个概率，只能退而画带状面积图；生命棋可以把概率编码到每一格。
 
 **Commit**
 
