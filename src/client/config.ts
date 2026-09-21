@@ -19,7 +19,7 @@
  * 代价是「双侧同步」必须是一个**动作**（把 A 的玩家级设置整体复制到 B），
  * 否则每换一次对照都要手配两遍。见 `main.ts` 的 `syncRoleSettings()`。
  */
-import type { GameRules, Role, Topology } from "../core/types.js";
+import type { GameRules, Mode, Role, Topology } from "../core/types.js";
 import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
 // 能力表（谁收哪些档位）住在 broker 里，界面**不另抄一份** —— 抄一份的话，
 // 往能力表里加一个上游时界面会照旧标注「不支持」。`clampEffort` 因此是
@@ -58,6 +58,13 @@ export interface DuelSettings {
    */
   cols: number;
   rows: number;
+  /**
+   * 对局模式（双人对弈 / 纯生执单人）。
+   *
+   * 它是对局级的：两边不同就不是同一个游戏。改它**等于换一局** ——
+   * 半局中把死之执抽走，前几回合的记录里那些死之执落点就成了无法解释的数据。
+   */
+  mode: Mode;
   topology: Topology;
   /**
    * 回合上限。
@@ -263,6 +270,8 @@ function defaultOpeningId(cols: number, rows: number): string {
 export const DEFAULT_DUEL: DuelSettings = {
   cols: DEFAULT_COLS,
   rows: DEFAULT_ROWS,
+  // 出厂是双人对弈：那是跨模型对照的载体，也是这个项目的主线
+  mode: "duel",
   topology: presetFor(DEFAULT_COLS, DEFAULT_ROWS).defaultTopology,
   turnLimit: defaultTurnLimit(DEFAULT_COLS, DEFAULT_ROWS),
   // 胜负线的出厂值**取自预设**，不另写一份字面量：抄一份的话，改预设里的
@@ -632,6 +641,7 @@ export function load(): Persisted {
     duel: {
       cols: size.cols,
       rows: size.rows,
+      mode: rawDuel.mode === "solo" ? "solo" : "duel",
       topology: clampTopology(rawDuel.topology, preset.defaultTopology),
       turnLimit: clampTurnLimit(rawDuel.turnLimit, preset.rules.turnLimit),
       lifeWinRatio: clampRatio(rawDuel.lifeWinRatio, preset.rules.lifeWinRatio),

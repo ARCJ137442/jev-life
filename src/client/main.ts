@@ -415,7 +415,10 @@ function updateStats(): void {
  * 漏改导致两个数字对不上。失败的调用不产生费用，也不计入分母。
  */
 function updateCostUi(): void {
-  const ok = state.logs.filter((r) => !r.failed).length * ROLE_ORDER.length;
+  // 分母 = 成功调用次数。单人模式下每回合只有一次调用，乘 2 会把均次费用
+  // 算成一半 —— 而这个数正是用来横向比后端的，错一半没人看得出来
+  const perTurn = store.duel.mode === "solo" ? 1 : ROLE_ORDER.length;
+  const ok = state.logs.filter((r) => !r.failed).length * perTurn;
   $("cost").textContent =
     (state.costUnknown ? "≥ $" : "$") + state.costTotal.toFixed(6);
   // 单次调用常常只有十万分之几美元，4 位小数会一律显示成 $0.0000
@@ -767,6 +770,7 @@ function currentVerdict(): Termination | null {
   return classifyTermination(
     {
       board: state.board,
+      mode: store.duel.mode,
       topology: store.duel.topology,
       turn: state.turn,
       ratioHistory: state.ratioHistory,
@@ -789,17 +793,28 @@ async function doTurn(): Promise<void> {
   const turnStart = performance.now();
   const at = new Date().toISOString();
   const topology = store.duel.topology;
+  const mode = store.duel.mode;
+  const solo = mode === "solo";
   const rules = currentRules();
   const board = state.board;
   setLed("busy", "status.calling");
 
-  /* ── 双方**同时**决策，都基于演化前的棋盘（见文件头）── */
+  /* ── 双方**同时**决策，都基于演化前的棋盘（见文件头）──
+     单人模式只有生之执一方，所以这里只有一个 attempt —— 后面所有按下标取
+     `outcomes[1]` 的地方都必须跟着分叉（漏一处的症状是恢复出一手不存在的棋）。 */
 
-  const attempts: RoleAttempt[] = ROLE_ORDER.map((role) => {
+  // ⚠ 刻意写成 filter 而不是三元 + 一个只含 life 的字面量数组：方括号包裹的
+  // 字符串字面量会被 `tools/check-dom.ts` 当成 DOM id 清单（它扫的是全文，
+  // **注释也算**），于是报出一个并不存在的 `#life`。与 `ROLE_ORDER` 那里记的
+  // 是同一个坑，只是换了个方向
+  const actors: readonly Role[] = ROLE_ORDER.filter((r) => r === "life" || !solo);
+
+  const attempts: RoleAttempt[] = actors.map((role) => {
     const settings = store.roles[role];
     const input: StateInput = {
       board,
       role,
+      mode,
       topology,
       rules,
       turn: state.turn,
@@ -844,7 +859,7 @@ async function doTurn(): Promise<void> {
       turn: state.turn + 1,
       at,
       life: roleLogOf(attempts[0], outcomes[0], latencyMs),
-      death: roleLogOf(attempts[1], outcomes[1], latencyMs),
+      death: solo ? null : roleLogOf(attempts[1], outcomes[1], latencyMs),
       aliveBefore: aliveCount(board),
       aliveAfter: aliveCount(board),
       netGrowth: 0,
@@ -939,7 +954,10 @@ async function doTurn(): Promise<void> {
   };
 
   const lifeFlip = cellOf("life");
-  const deathFlip = cellOf("death");
+  // ★ 单人模式**不查死之执的落点**：`cellOf("death")` 会当场抛「没有 death
+  // 的决策」—— 那是对的，因为死之执压根没有 requests。所以要显式分叉，
+  // 而不是给一个默认格号（默认值会变成一个不存在的落点，一路流进历史与动画）
+  const deathFlip = solo ? null : cellOf("death");
 
   /* ── 落子 + 演化一代 ──
      先把**本回合开始时**的占比记进历史：classifyTermination 的序列是
@@ -951,23 +969,27 @@ async function doTurn(): Promise<void> {
   // 引擎是纯函数：flip 返回新棋盘，不会改动传进去的那个。
   // 中间那副（落完子、还没演化）要留下来 —— 棋盘动画的两相就是按它切的：
   // 落子相画「谁翻了哪一格」，演化相画「翻完之后长成什么样」
-  const mid = flip(flip(board, lifeFlip), deathFlip);
+  const mid = deathFlip === null ? flip(board, lifeFlip) : flip(flip(board, lifeFlip), deathFlip);
   const next = lifeStep(mid, topology);
   const after = aliveCount(next);
   const netGrowth = after - before;
 
-  // 两边记的是**同一个**净增长：它是「棋盘涨了多少」这个客观量，
-  // 不是某一方的得分。生之执要它大、死之执要它小，所以两边看同一个数
+  // 双人模式下两边记的是**同一个**净增长：它是「棋盘涨了多少」这个客观量，
+  // 不是某一方的得分。生之执要它大、死之执要它小，所以两边看同一个数。
+  //
+  // ★ 单人模式**只记生之执那一栏**：死之执不在场，给它记一个数会让这个数
+  // 一路进到发给模型的 `scores` 里 —— 一个凭空长出来的「死之执战绩」
   state.scores = {
     life: state.scores.life + netGrowth,
-    death: state.scores.death + netGrowth,
+    death: solo ? 0 : state.scores.death + netGrowth,
   };
 
   state.history.push({
     turn: state.turn,
     board: next,
     lifeFlip,
-    deathFlip,
+    // 单人模式下这一栏**整个不出现**（TurnRecord.deathFlip 可选）
+    ...(deathFlip === null ? {} : { deathFlip }),
     aliveCount: after,
     netGrowth,
   });
@@ -990,10 +1012,13 @@ async function doTurn(): Promise<void> {
   renderer.playTurn({
     mid,
     after: next,
-    flips: [
-      { cell: lifeFlip, role: "life" },
-      { cell: deathFlip, role: "death" },
-    ],
+    flips:
+      deathFlip === null
+        ? [{ cell: lifeFlip, role: "life" }]
+        : [
+            { cell: lifeFlip, role: "life" },
+            { cell: deathFlip, role: "death" },
+          ],
   });
 
   /* ── 本回合的分布，供热力图（③）用 ── */
@@ -1022,7 +1047,7 @@ async function doTurn(): Promise<void> {
     turn: state.turn,
     at,
     life: roleLogOf(attempts[0], outcomes[0], latencyMs),
-    death: roleLogOf(attempts[1], outcomes[1], latencyMs),
+    death: solo ? null : roleLogOf(attempts[1], outcomes[1], latencyMs),
     aliveBefore: before,
     aliveAfter: after,
     netGrowth,
@@ -1101,6 +1126,10 @@ function reasonText(v: Termination, rules: GameRules): string {
       return t("term.lifeWinRatio", { n: rules.lifeStreak, ratio: pct(rules.lifeWinRatio) });
     case "deathWinRatio":
       return t("term.deathWinRatio", { n: rules.deathStreak, ratio: pct(rules.deathWinRatio) });
+    // ★ 单人专有：同一个占比，在单人局里的含义是「局面自己死绝了」而不是
+    // 「对手把棋盘压死了」—— 而这里没有对手。措辞照实写
+    case "soloDiedOut":
+      return t("term.soloDiedOut", { n: rules.deathStreak, ratio: pct(rules.deathWinRatio) });
     case "noLegalCell":
       return v.winner === "life" ? t("term.noLegalCellLife") : t("term.noLegalCellDeath");
     case "repeatBlocked":
@@ -1126,10 +1155,16 @@ function renderResult(): void {
       max: state.aliveMax,
       min: state.aliveMin,
     }),
-    t("over.ratioLine", {
-      life: pct(rules.lifeWinRatio),
-      death: pct(rules.deathWinRatio),
-    }),
+    // 单人模式没有「双方」可言，那一行改成只有一条线
+    store.duel.mode === "solo"
+      ? t("over.ratioLineSolo", {
+          life: pct(rules.lifeWinRatio),
+          death: pct(rules.deathWinRatio),
+        })
+      : t("over.ratioLine", {
+          life: pct(rules.lifeWinRatio),
+          death: pct(rules.deathWinRatio),
+        }),
   ].join("\n");
 
   showOverlay(t("over.gameOver"), body, false, [
@@ -1266,6 +1301,7 @@ function sessionInput(finished: boolean): SessionInput {
   return {
     cols: state.board.cols,
     rows: state.board.rows,
+    mode: store.duel.mode,
     topology: store.duel.topology,
     rules: currentRules(),
     openingId: store.duel.openingId,
@@ -1400,6 +1436,9 @@ function restoreSession(): boolean {
     s.finished ||
     s.cols !== store.duel.cols ||
     s.rows !== store.duel.rows ||
+    // 模式对不上就作废：单人局的历史里根本没有死之执的落点，塞进双人局会
+    // 得到一段「另一方从没走过棋」的过去，而那看起来与真的一模一样
+    s.mode !== store.duel.mode ||
     s.topology !== store.duel.topology
   ) {
     clearSession();
@@ -1770,6 +1809,7 @@ function syncGameUi(): void {
   renderSizeButtons();
   renderOpenings();
 
+  $<HTMLSelectElement>("inpMode").value = store.duel.mode;
   $<HTMLInputElement>("inpCols").value = String(store.duel.cols);
   $<HTMLInputElement>("inpRows").value = String(store.duel.rows);
   $<HTMLSelectElement>("inpTopology").value = store.duel.topology;
@@ -1860,6 +1900,7 @@ function validateTurnLimit(): boolean {
  */
 function applyDuelSettings(restart: boolean): void {
   const d = store.duel;
+  d.mode = $<HTMLSelectElement>("inpMode").value === "solo" ? "solo" : "duel";
   d.topology = $<HTMLSelectElement>("inpTopology").value === "torus" ? "torus" : "bounded";
   d.turnLimit = clampTurnLimit($<HTMLInputElement>("inpTurnLimit").value, d.turnLimit);
   d.lifeWinRatio = pctField("inpLifeWin", d.lifeWinRatio);
@@ -1903,6 +1944,7 @@ function bindGameSettings(): void {
   for (const id of ["inpCols", "inpRows"]) {
     $(id).addEventListener("change", applySizeInputs);
   }
+  $("inpMode").addEventListener("change", () => applyDuelSettings(true));
   $("inpTopology").addEventListener("change", () => applyDuelSettings(true));
   // 胜负线与回合上限同类：它们是**博弈定义**，改了就不是同一局（理由见
   // applyDuelSettings 的注释）—— 半局中改胜负线会让这一局的前后两半不可比
@@ -1928,6 +1970,7 @@ function bindGameSettings(): void {
 
 function resetDuelSettings(): void {
   const p = presetFor(store.duel.cols, store.duel.rows);
+  store.duel.mode = "duel";
   store.duel.topology = p.defaultTopology;
   store.duel.turnLimit = p.rules.turnLimit;
   store.duel.lifeWinRatio = p.rules.lifeWinRatio;
@@ -2379,6 +2422,7 @@ function applyImported(text: string, expect: ArchiveKind): void {
         ...store.duel,
         cols: size.cols,
         rows: size.rows,
+        mode: r.duel.mode === "solo" ? "solo" : "duel",
         topology: r.duel.topology === "torus" ? "torus" : hit.defaultTopology,
         turnLimit: clampTurnLimit(r.duel.turnLimit, hit.rules.turnLimit),
         // 胜负线也过 clamp：导入的档案不比自己配的宽松（同一条纪律）
@@ -2421,6 +2465,7 @@ function applyImported(text: string, expect: ArchiveKind): void {
           app: "",
           cols: s.cols,
           rows: s.rows,
+          mode: store.duel.mode,
           topology: store.duel.topology,
           rules: currentRules(),
           openingId: store.duel.openingId,
@@ -2584,6 +2629,7 @@ function bindIncompatibleModal(): void {
         app: "",
         cols: store.duel.cols,
         rows: store.duel.rows,
+        mode: store.duel.mode,
         topology: store.duel.topology,
         rules: currentRules(),
         openingId: store.duel.openingId,
@@ -2784,7 +2830,7 @@ function boot(): void {
     "bToggle", "bStep", "bNew", "bClearBoard", "drawHint", "bResult", "pace", "paceVal",
     "bLang", "langLbl", "bGame", "bStrategy", "bApi", "bLog", "bArchive",
     "scrim", "dGame", "dStrategy", "dApi", "dLog", "dArchive", "toast", "fileInput",
-    "sizeList", "inpCols", "inpRows", "sizeNote", "inpTopology", "topoWarn",
+    "sizeList", "inpCols", "inpRows", "sizeNote", "inpMode", "inpTopology", "topoWarn",
     "inpTurnLimit", "turnLimitWarn", "rulesNote",
     "inpLifeWin", "inpLifeStreak", "inpDeathWin", "inpDeathStreak",
     "openingList", "inpAnim", "inpParticles", "inpFlipMs", "flipMsVal", "bGameReset", "bGameDone",

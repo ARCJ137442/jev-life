@@ -87,7 +87,13 @@ function survives(rowStrings: readonly string[], preset: (typeof PRESETS)[number
   for (let gen = 1; gen <= gens; gen++) {
     board = lifeStep(board, topology);
     seen.add(boardKey(board));
-    const snap: GameSnapshot = { board, topology, turn: gen, ratioHistory: [...ratioHistory] };
+    const snap: GameSnapshot = {
+      board,
+      mode: "duel",
+      topology,
+      turn: gen,
+      ratioHistory: [...ratioHistory],
+    };
 
     const verdict = classifyTermination(snap, preset.rules, seen);
     assert.equal(verdict, null, `第 ${gen} 代就终局了：${JSON.stringify(verdict)}`);

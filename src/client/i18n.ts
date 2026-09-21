@@ -139,6 +139,11 @@ const DICT: Record<Lang, Record<string, string>> = {
       "⚠ 该尺寸的参数未标定：回合上限与胜负线是为 4/8/16 调的，而小棋盘的分辨率粗 —— 4×4 上一格就是 6.25%，0.30 那条线落下去只等于「≥ 5 格」，预设开局本来就有 6 格，一开局就已经越线。这个尺寸上默认值会是什么效果没人知道，自己去「终局规则」里调。该尺寸也没有开局库，只能自己画。",
     "game.torusTiny":
       "⚠ 环绕拓扑 + 极小尺寸（2~3）：能算，但 rows = 2 时 r−1 与 r+1 是同一行，同一个格子会被重复计数 —— 结果是确定的，只是没有对应的几何直觉。",
+    "game.mode": "对局模式",
+    "game.modeDuel": "双人对弈 — 生之执与死之执各翻一格",
+    "game.modeSolo": "纯生执单人 — 只有生之执在走",
+    "game.modeNote":
+      "单人模式没有死之执：一回合只翻一格。终局判定也跟着变 —— 「死之执无处可翻」不再是终局（那意味着棋盘全死，而那时生之执处处可翻），「推不动」只问生之执的落点；占比连续跌破死之执那条线的含义是「棋盘死绝」，不是「对手赢了」。",
     "game.topology": "边界拓扑",
     "game.topoBounded": "有界 — 棋盘之外算死格，边界是墙",
     "game.topoTorus": "环绕 — 上下边相连、左右边相连，没有墙",
@@ -326,6 +331,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "over.draw": "和局",
     "over.stats": "共 {turn} 回合｜终局 {alive} 格（{ratio}）｜本局 A.MAX {max} / A.MIN {min}",
     "over.ratioLine": "生之执线 {life} · 死之执线 {death}",
+    "over.ratioLineSolo": "获胜线 {life} · 死绝线 {death}",
     "over.again": "再来一局",
     "over.close": "关闭，看终局棋盘",
     "over.apiFail": "调用失败",
@@ -344,6 +350,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "term.noLegalCellDeath": "死之执把棋盘清空了（对方一格都翻不动）—— 死之执获胜",
     "term.repeatBlocked": "整盘推不动：此后任何落子组合都会走到见过的局面",
     "term.turnLimit": "到达回合上限 {n}，仍未分出胜负",
+    "term.soloDiedOut":
+      "活细胞占比连续 {n} 回合 ≤ {ratio} —— 棋盘死绝（单人局没有对手，「死之执获胜」不适用）",
 
     /* ---------- 界面上自造的错误（不来自上游）---------- */
     "err.backendUnreachable":
@@ -589,6 +597,11 @@ const DICT: Record<Lang, Record<string, string>> = {
       "⚠ This size is uncalibrated: the turn limit and win lines were tuned for 4/8/16, and a small board has coarse resolution — one cell on a 4×4 is 6.25%, so a line at 0.30 means “5 cells or more”, while the preset openings already start at 6 and are past the line on turn 0. Nobody knows what the defaults do at this size; adjust them under “End-of-game rules”. There is no opening library either — draw your own.",
     "game.torusTiny":
       "⚠ Torus topology at a tiny size (2–3): it computes, but with rows = 2 the row r−1 and the row r+1 are the same row, so a cell's neighbours are counted more than once — the result is well defined, it just has no matching geometric intuition.",
+    "game.mode": "Game mode",
+    "game.modeDuel": "Duel — Life and Death each flip one cell",
+    "game.modeSolo": "Life only — nobody else moves",
+    "game.modeNote":
+      "In solo mode there is no Death: a turn flips a single cell. The end conditions change with it — “Death has nothing to flip” is no longer an ending (it means the board is entirely dead, and then Life can flip anywhere), “cannot move” only asks about Life's moves, and a ratio that stays below Death's line means “the board died out”, not “the opponent won”.",
     "game.topology": "Boundary topology",
     "game.topoBounded": "Bounded — outside the board counts as dead; the edge is a wall",
     "game.topoTorus": "Torus — top wraps to bottom, left to right; no walls",
@@ -776,6 +789,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "over.draw": "Draw",
     "over.stats": "{turn} turns | final {alive} cells ({ratio}) | this game A.MAX {max} / A.MIN {min}",
     "over.ratioLine": "Life line {life} · Death line {death}",
+    "over.ratioLineSolo": "Win at {life} · died out at {death}",
     "over.again": "Play again",
     "over.close": "Close and inspect the final board",
     "over.apiFail": "Call failed",
@@ -794,6 +808,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "term.noLegalCellDeath": "Death emptied the board (Life has no legal cell) — Death wins",
     "term.repeatBlocked": "The position can no longer move: every combination leads back to a seen position",
     "term.turnLimit": "Reached the {n}-turn limit without a winner",
+    "term.soloDiedOut":
+      "The live-cell ratio stayed ≤ {ratio} for {n} turns — the board died out (there is no opponent in a solo game, so “Death wins” does not apply)",
 
     /* ---------- Errors invented by the UI (not from upstream) ---------- */
     "err.backendUnreachable":

@@ -327,7 +327,8 @@ async function play(args: Args): Promise<void> {
   let termination: Termination | null = null;
 
   for (;;) {
-    const snap = { board, topology, turn, ratioHistory: [...ratioHistory] };
+    // 无头 CLI 只跑双人对弈（单人模式还没有 CLI 入口）
+    const snap = { board, mode: "duel" as const, topology, turn, ratioHistory: [...ratioHistory] };
     const verdict = life.classifyTermination(snap, rules, seen);
     if (verdict) {
       termination = verdict;
@@ -341,6 +342,7 @@ async function play(args: Args): Promise<void> {
       const input: StateInput = {
         board,
         role,
+        mode: "duel",
         topology,
         rules,
         turn,

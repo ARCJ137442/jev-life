@@ -43,7 +43,7 @@ import type { DetectedPattern } from "./patterns.js";
 import { noulDiscriminator } from "../shared/types.js";
 import type { Question, Questions, TurnRecord } from "../shared/types.js";
 import type { Channel } from "./channels.js";
-import type { Board, Cell, GameRules, Role, Topology } from "./types.js";
+import type { Board, Cell, GameRules, Mode, Role, Topology } from "./types.js";
 
 /* ══════════════════════════════════════════════════════════════════
    Jev 协议
@@ -111,6 +111,12 @@ export const DEFAULT_ROLE_CONTEXT: RoleContext = {
 export interface StateInput {
   readonly board: Board;
   readonly role: Role;
+  /**
+   * 对局模式。**必填**（理由见 `Mode`）：规则文案在两种模式下**不一样** ——
+   * 双人时「每回合双方各翻一格」，单人时只有生之执在动。把双人那句写给单人局，
+   * 模型就在玩另一个游戏，而这一整层存在的意义正是「把规则讲清楚」。
+   */
+  readonly mode: Mode;
   readonly topology: Topology;
   readonly rules: GameRules;
   readonly turn: number;
@@ -174,7 +180,8 @@ export interface SerializedTurn {
   readonly turn: number;
   readonly board: number[][];
   readonly life_flip: readonly [number, number];
-  readonly death_flip: readonly [number, number];
+  /** 单人模式没有死之执那一手，此时**整个字段不出现** */
+  readonly death_flip?: readonly [number, number];
   readonly alive_count: number;
   readonly net_growth: number;
 }
@@ -221,10 +228,18 @@ function roleStatement(role: Role): string {
   );
 }
 
-/** 计分方式。两个角色共用前半段，只有最后一句相反 */
-function objective(role: Role): string {
+/**
+ * 计分方式。两个角色共用前半段，只有最后一句相反。
+ *
+ * ⚠ 单人模式**不能写「双方各翻一格」** —— 那一句在单人局里是假的，而模型
+ * 会照着它去推测「对手会怎么应」。规则说明写错一个字，测到的就是另一个游戏。
+ */
+function objective(role: Role, mode: Mode): string {
   const shared =
-    "计分方式：每回合双方各翻一格，然后棋盘演化一代；演化后的活细胞数与上一回合相比的变化量，" +
+    (mode === "solo"
+      ? "计分方式：每回合你翻一格，然后棋盘演化一代；"
+      : "计分方式：每回合双方各翻一格，然后棋盘演化一代；") +
+    "演化后的活细胞数与上一回合相比的变化量，" +
     "就是这一回合的净增长。把各回合的净增长累加起来，得到累计净增长，记在 scores 里。";
   const mine =
     role === "life"
@@ -262,15 +277,30 @@ function horizon(turn: number, rules: GameRules): string {
  * （它会以为自己已经赢了）。所以这里把「连续」、两边的 streak 数值、
  * 以及为什么要有防抖，全部写出来。
  */
-function winCondition(rules: GameRules, board: Board): string {
+function winCondition(rules: GameRules, board: Board, mode: Mode): string {
   const total = board.cols * board.rows;
-  return (
-    `存活比例 = 棋盘上的活细胞数 ÷ 总格数（${board.cols}×${board.rows} = ${total} 格），记在 alive_ratio 里。\n` +
-    `生之执获胜：存活比例「连续」 ${rules.lifeStreak} 回合 ≥ ${percent(rules.lifeWinRatio)}。\n` +
-    `死之执获胜：存活比例「连续」 ${rules.deathStreak} 回合 ≤ ${percent(rules.deathWinRatio)}。\n` +
+  const head =
+    `存活比例 = 棋盘上的活细胞数 ÷ 总格数（${board.cols}×${board.rows} = ${total} 格），记在 alive_ratio 里。\n`;
+  const tail =
     `「连续」是这条规则的关键部分（防抖）：生命棋单代的涨落很大，只看一代就判胜负等于把胜负交给运气。` +
     `所以必须是连续越界满 ${rules.lifeStreak} / ${rules.deathStreak} 回合才算赢，` +
-    `中途只要有一回合回到两条线之间，计数就从头开始。`
+    `中途只要有一回合回到两条线之间，计数就从头开始。`;
+
+  // 单人：那条「死之执获胜」的线仍然生效，但它的含义是**局面自己死绝了**，
+  // 而不是「对手赢了」—— 措辞照实写，别把不存在的人写进规则里
+  if (mode === "solo") {
+    return (
+      head +
+      `你获胜：存活比例「连续」 ${rules.lifeStreak} 回合 ≥ ${percent(rules.lifeWinRatio)}。\n` +
+      `你落败：存活比例「连续」 ${rules.deathStreak} 回合 ≤ ${percent(rules.deathWinRatio)} —— 棋盘死绝。\n` +
+      tail
+    );
+  }
+  return (
+    head +
+    `生之执获胜：存活比例「连续」 ${rules.lifeStreak} 回合 ≥ ${percent(rules.lifeWinRatio)}。\n` +
+    `死之执获胜：存活比例「连续」 ${rules.deathStreak} 回合 ≤ ${percent(rules.deathWinRatio)}。\n` +
+    tail
   );
 }
 
@@ -281,7 +311,23 @@ function winCondition(rules: GameRules, board: Board): string {
  * 回合上限。**不能只写「占比 ≥60% 获胜」** —— 模型不知道棋盘被清空时谁赢、
  * 也不知道打到 90 回合会怎样，那它就在玩另一个游戏。
  */
-function terminationConditions(rules: GameRules): string {
+function terminationConditions(rules: GameRules, mode: Mode): string {
+  // 单人：**棋盘全死不是终局**（生之执处处可翻），推不动的判定也只问生之执的
+  // 落点。照搬双人那两条会凭空多出两条不存在的结束方式，而模型会据此
+  // 高估「棋盘被清空」的危险，甚至以为自己已经输了
+  if (mode === "solo") {
+    return (
+      "对局在下列任一情况下立即结束：\n" +
+      `1. 你达成获胜条件，或棋盘死绝（存活比例连续越界达到规定回合数，详见获胜条件）。\n` +
+      "2. 棋盘全活 —— 你把棋盘占满了，一个死格都不剩，判你获胜。" +
+      "这不是「没棋可走就输」，而是你把自己的目标推到了极限。" +
+      "**注意：棋盘全死不会结束对局** —— 那时你仍然可以翻转任意一个死格。\n" +
+      `3. 推不动了：此后无论你怎么落子，下一回合的局面都会重复已经出现过的局面 —— ` +
+      `按当时的存活比例判：≥ ${percent(rules.lifeWinRatio)} 判你胜，≤ ${percent(rules.deathWinRatio)} 判你落败，` +
+      `夹在两条线之间判和局。\n` +
+      `4. 回合数达到上限 ${rules.turnLimit}：仍未分出胜负，判和局。`
+    );
+  }
   return (
     "对局在下列任一情况下立即结束：\n" +
     `1. 一方达成获胜条件（存活比例连续越界达到规定回合数，详见获胜条件）。\n` +
@@ -358,14 +404,16 @@ function serializeTurn(t: TurnRecord): SerializedTurn {
     turn: t.turn,
     board: toGrid(t.board),
     life_flip: rowCol(t.board, t.lifeFlip),
-    death_flip: rowCol(t.board, t.deathFlip),
+    // ★ 单人模式**没有这一手**：字段整个不出现，而不是编一个格号。
+    // 编出来的数会一路流进模型的记忆里，看起来与真的一模一样
+    ...(t.deathFlip === undefined ? {} : { death_flip: rowCol(t.board, t.deathFlip) }),
     alive_count: t.aliveCount,
     net_growth: t.netGrowth,
   };
 }
 
 export function buildState(input: StateInput): JevState {
-  const { board, role, topology, rules, turn, scores, history, context } = input;
+  const { board, role, mode, topology, rules, turn, scores, history, context } = input;
 
   const note = (context.ruleNote ?? "").trim();
 
@@ -373,10 +421,10 @@ export function buildState(input: StateInput): JevState {
   const stateRules: StateRules = {
     role,
     role_statement: roleStatement(role),
-    objective: objective(role),
+    objective: objective(role, mode),
     horizon: horizon(turn, rules),
-    termination_conditions: terminationConditions(rules),
-    win_condition: winCondition(rules, board),
+    termination_conditions: terminationConditions(rules, mode),
+    win_condition: winCondition(rules, board, mode),
     topology_note: topologyNote(topology),
     ...(note === "" ? {} : { rule_note: note }),
   };

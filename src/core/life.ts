@@ -3,6 +3,7 @@ import type {
   Cell,
   GameRules,
   GameSnapshot,
+  Mode,
   Role,
   Termination,
   Topology,
@@ -429,10 +430,27 @@ function ratioWinner(ratio: number, rules: GameRules): Role | null {
  * 返回值是给「本函数单独被调用」时兜底的，语义上仍然正确 —— 只是不该指望
  * classifyTermination 会把空集报成 repeatBlocked。
  */
-function roundIsBlocked(board: Board, topology: Topology, seen: ReadonlySet<string>): boolean {
+function roundIsBlocked(
+  board: Board,
+  topology: Topology,
+  seen: ReadonlySet<string>,
+  mode: Mode,
+): boolean {
   const born = legalCells(board, "life");
-  const killed = legalCells(board, "death");
 
+  // ★ 单人模式：一回合只有**一格**落子，所以「推得动」只问生之执的那些落点。
+  // 仍然按一侧判是**对的**（不是简化）—— 死之执根本不落子，把它的落点也算进
+  // 「这一回合能不能改变局面」是在给一个不存在的行动方投票。
+  // 与双人那条「按角色判是错的」并不矛盾：那里错的原因是**忽略了同回合
+  // 另一方的落子**，而单人模式下另一方本来就没有落子。
+  if (mode === "solo") {
+    for (const life of born) {
+      if (!seen.has(boardKey(lifeStep(flip(board, life), topology)))) return false;
+    }
+    return true;
+  }
+
+  const killed = legalCells(board, "death");
   for (const life of born) {
     // 生之执先落子。翻一次得到一个中间局面，再让死之执在它上面落子 ——
     // 两边都基于**演化前**的棋盘决策，所以两者落点必然不同格（见 legalCells）。
@@ -536,7 +554,8 @@ export function classifyTermination(
   rules: GameRules,
   seen: ReadonlySet<string>,
 ): Termination | null {
-  const { board, topology } = snap;
+  const { board, topology, mode } = snap;
+  const solo = mode === "solo";
 
   // 当前占比现算，不存两份真相。历史 + 当前拼成一条序列再数末尾连续段：
   // 当前这一代是刚演化完的，必须参与计数。
@@ -548,13 +567,23 @@ export function classifyTermination(
     return { reason: "lifeWinRatio", winner: "life" };
   }
   if (trailingRun(series, (v) => v <= rules.deathWinRatio) >= rules.deathStreak) {
-    return { reason: "deathWinRatio", winner: "death" };
+    // ⚠ 单人模式**不能报「死之执获胜」** —— 那是关于一个不在场的人的话。
+    // 同一个占比在这里的含义也不同：双人时它是「对手把局面压死了」，
+    // 单人时它是「局面自己死绝了」（演化会把棋盘点空，与有没有对手无关）。
+    // 所以换一条 reason，胜方为 null（没有对手，也就没有胜方）。
+    return solo
+      ? { reason: "soloDiedOut", winner: null }
+      : { reason: "deathWinRatio", winner: "death" };
   }
 
-  // 2. 走投无路。查两边、与被问的角色无关 —— 胜方是把棋盘**清空**（死执）或
-  //    **占满**（生执）的那一方，不套阈值（理由见函数头那段）。
-  //    两侧不可能同时为空（那要求棋盘一个格子都没有，而 MIN_SIZE = 4）。
-  if (legalCells(board, "death").length === 0) {
+  // 2. 走投无路。双人模式查两边、与被问的角色无关 —— 胜方是把棋盘**清空**
+  //    （死执）或**占满**（生执）的那一方，不套阈值（理由见函数头那段）。
+  //
+  //    ★ 单人模式**只查生之执那一侧**：死之执根本不会落子，「它无处可翻」
+  //    不构成终局 —— 棋盘全死时生之执反而处处可翻（每一格都是死格）。
+  //    照搬双人那条会把「棋盘被清空」当成终局判负，而单人模式下那恰恰是
+  //    可以继续下的局面（死绝是另一条 reason，靠占比连续越界来判）。
+  if (!solo && legalCells(board, "death").length === 0) {
     return { reason: "noLegalCell", winner: "death" };
   }
   if (legalCells(board, "life").length === 0) {
@@ -562,8 +591,10 @@ export function classifyTermination(
   }
 
   // 整盘推不动仍按占比定胜负 —— 占比冻住了，在界外的那一方会把它无限保持下去。
-  if (roundIsBlocked(board, topology, seen)) {
-    return { reason: "repeatBlocked", winner: ratioWinner(ratio, rules) };
+  // 单人模式下把「死之执胜」映成 null：理由同上，没有对手就没有胜方。
+  if (roundIsBlocked(board, topology, seen, mode)) {
+    const w = ratioWinner(ratio, rules);
+    return { reason: "repeatBlocked", winner: solo && w === "death" ? null : w };
   }
 
   // 3. 回合上限

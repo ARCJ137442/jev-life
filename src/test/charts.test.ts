@@ -283,7 +283,7 @@ test("差分：态势图的越界计数与 classifyTermination 的防抖判定�
       const series = [...history, ratio];
       const bounds = momentumBounds(series, RULES);
       const verdict = classifyTermination(
-        { board, topology: "bounded", turn: history.length, ratioHistory: history },
+        { board, mode: "duel", topology: "bounded", turn: history.length, ratioHistory: history },
         RULES,
         new Set([boardKey(board)]),
       );

@@ -14,6 +14,24 @@ export type Topology = "bounded" | "torus";
 /** 对局角色。短名直接用 Life / Death —— 长名 Keeper of Life 见 TERMS.md */
 export type Role = "life" | "death";
 
+/**
+ * 对局模式。
+ *
+ * | 模式 | 一回合是什么 | 谁在行动 |
+ * |---|---|---|
+ * | `duel` | 双方**同时**各翻一格，再演化一代 | 生之执与死之执 |
+ * | `solo` | 只翻一格，再演化一代 | **只有生之执** |
+ *
+ * ⚠ **这不是「把死之执关掉」那么简单**：没有死之执之后，好几条规则的含义
+ * 跟着变（死之执无棋可走不再是终局、推不动的判定只看一方的落点、终局文案里
+ * 也没有「死之执获胜」这回事）。所以它必须一路传到 `classifyTermination`
+ * 与 `core/context.ts` 的规则文案里，而不是只在界面上藏掉一个角色。
+ *
+ * 做成**必填**字段（不是可选 + 默认 duel）：漏传时编译器会当场报错，
+ * 而默认值只会让「单人局按双人规则判」这种错安静地发生。
+ */
+export type Mode = "duel" | "solo";
+
 /** 格子的一维索引：r * cols + c */
 export type Cell = number;
 
@@ -92,7 +110,18 @@ export type TerminationReason =
    * 胜方按当前占比定（`ratioWinner`）：占比冻住了，在胜负线之外的那一方会把
    * 这个占比无限保持下去；夹在两条线之间才是和局。
    */
-  | "repeatBlocked";
+  | "repeatBlocked"
+  /**
+   * **单人模式专有**：活细胞占比连续跌破死之执那条线 —— 也就是**棋盘死绝**。
+   *
+   * 单人模式下没有死之执，「死之执获胜」是一句关于一个不在场的人的话，
+   * 所以它不能复用 `deathWinRatio` 那条 reason：同一个局面在两种模式下
+   * 结束的理由本来就不同（一边是「对手达成了目标」，一边是「局面自己死了」）。
+   *
+   * 胜方是 `null` —— 没有对手，也就没有胜方。界面按这条 reason 显示
+   * 「棋盘死绝」，而不是「死之执获胜」。
+   */
+  | "soloDiedOut";
 
 export interface Termination {
   readonly reason: TerminationReason;
@@ -103,6 +132,8 @@ export interface Termination {
 /** 终局判定需要的不只是当前棋盘 —— 防抖要用到占比历史，判重复要用到拓扑 */
 export interface GameSnapshot {
   readonly board: Board;
+  /** 谁在行动。**必填** —— 见 `Mode` 那段：默认值会让「单人局按双人规则判」安静地发生 */
+  readonly mode: Mode;
   /** 算后继状态要用（repeatBlocked 检测） */
   readonly topology: Topology;
   readonly turn: number;

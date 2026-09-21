@@ -78,6 +78,7 @@ function input(over: Partial<StateInput> = {}): StateInput {
   return {
     board: BOARD(),
     role: "life",
+    mode: "duel",
     topology: "bounded",
     rules: RULES,
     turn: 12,
@@ -364,4 +365,81 @@ test("没有合法格时抛出可诊断的错误，而不是发一个空 record"
     /没有可翻的格子/,
     "空 questions 会被当成一次「问题为零」的请求发出去，上游只会报一个看不懂的错",
   );
+});
+
+/* ══════════════════════════════════════════════════════════════════
+   ★ 单人模式：规则文案与记忆
+   ══════════════════════════════════════════════════════════════════
+   这一层存在的意义就是「把规则讲清楚」。单人局里规则**确实不一样**，
+   照抄双人那套文案等于让模型去玩另一个游戏 —— 而它不会报错，只会让这一局
+   的测量数字谁也不是。 */
+
+test("★ 单人：objective 不能写「双方各翻一格」", () => {
+  const duel = buildState(input());
+  const solo = buildState(input({ mode: "solo" }));
+
+  assert.ok(duel.rules.objective.includes("双方各翻一格"), duel.rules.objective);
+  assert.ok(
+    !solo.rules.objective.includes("双方"),
+    `单人局的计分说明里还写着「双方」：${solo.rules.objective}`,
+  );
+  assert.ok(solo.rules.objective.includes("你翻一格"), solo.rules.objective);
+  assert.notEqual(duel.rules.objective, solo.rules.objective);
+});
+
+test("★ 单人：win_condition 写「你获胜 / 你落败」，不写「死之执获胜」", () => {
+  const solo = buildState(input({ mode: "solo" }));
+  assert.ok(solo.rules.win_condition.includes("你获胜"), solo.rules.win_condition);
+  assert.ok(solo.rules.win_condition.includes("你落败"), solo.rules.win_condition);
+  assert.ok(
+    !solo.rules.win_condition.includes("死之执获胜"),
+    "单人局没有死之执，规则里不该出现它",
+  );
+});
+
+test("★ 单人：termination_conditions 里「棋盘全死」不是终局，且明说可以继续翻", () => {
+  const solo = buildState(input({ mode: "solo" }));
+  const duel = buildState(input());
+  assert.ok(
+    solo.rules.termination_conditions.includes("棋盘全死不会结束对局"),
+    solo.rules.termination_conditions,
+  );
+  assert.ok(!duel.rules.termination_conditions.includes("棋盘全死不会结束对局"));
+  // 双人那条「判死之执胜」在单人局里必须消失
+  assert.ok(!solo.rules.termination_conditions.includes("判死之执胜"));
+});
+
+test("★ 单人：recent_history 里**没有** death_flip 这一栏", () => {
+  const board = BOARD();
+  const soloInput = input({
+    mode: "solo",
+    context: { ...DEFAULT_ROLE_CONTEXT, memory: 5 },
+    history: [
+      {
+        turn: 0,
+        board,
+        lifeFlip: legalCells(board, "life")[0],
+        // 单人模式没有这一手
+        aliveCount: 3,
+        netGrowth: 1,
+      },
+    ],
+  });
+  const solo = buildState(soloInput);
+  const h = solo.aids.recent_history?.[0] as Record<string, unknown> | undefined;
+  assert.ok(h, "记忆没有被写进 state");
+  assert.ok(has(h as object, "life_flip"), "生之执那一手应当在");
+  assert.ok(
+    !has(h as object, "death_flip"),
+    "单人模式没有死之执那一手 —— 字段整个不出现，而不是补一个 0（0 是一个真实的格号）",
+  );
+
+  // 双人模式下同一栏照旧出现
+  const duel = buildState(
+    input({
+      context: { ...DEFAULT_ROLE_CONTEXT, memory: 5 },
+      history: soloInput.history.map((t) => ({ ...t, deathFlip: 0 })),
+    }),
+  );
+  assert.ok(has(duel.aids.recent_history?.[0] as object, "death_flip"));
 });

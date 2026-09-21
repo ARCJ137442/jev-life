@@ -23,7 +23,7 @@
  *    会继续往下走。这是那种「不报错、只是结论不同」的错，最该防。
  */
 import { boardFromRows, toRows } from "../core/life.js";
-import type { GameRules, Topology } from "../core/types.js";
+import type { GameRules, Mode, Topology } from "../core/types.js";
 import type { TurnRecord } from "../shared/types.js";
 import type { Role } from "../core/types.js";
 import { t } from "./i18n.js";
@@ -102,7 +102,15 @@ export interface StoredTurn {
   readonly turn: number;
   readonly board: string[];
   readonly lifeFlip: number;
-  readonly deathFlip: number;
+  /**
+   * 死之执那一手。**可选** —— 单人模式没有它（见 `shared/types.ts` 的
+   * `TurnRecord.deathFlip`）。
+   *
+   * ⚠ 读的时候必须用 `undefined` 判，**不能**用 `Number(x) || 0`：
+   * 后者会把「没有这一手」与「落在第 0 格」变成同一个值，而第 0 格是一个
+   * 完全合法的落点 —— 于是恢复出来的单人局会凭空多出一手死之执的棋。
+   */
+  readonly deathFlip?: number;
   readonly aliveCount: number;
   readonly netGrowth: number;
 }
@@ -112,6 +120,11 @@ export interface Session {
   app: string;
   cols: number;
   rows: number;
+  /**
+   * 对局模式。**旧存档没有这一栏，按 `duel` 读** —— 在 `mode` 存在之前
+   * 只可能有双人对弈，把它当单人会让一份双人存档在恢复后少掉一半的行动。
+   */
+  mode: Mode;
   topology: Topology;
   rules: GameRules;
   openingId: string;
@@ -155,7 +168,8 @@ export function serializeTurn(rec: TurnRecord): StoredTurn {
     turn: rec.turn,
     board: toRows(rec.board),
     lifeFlip: rec.lifeFlip,
-    deathFlip: rec.deathFlip,
+    // 单人模式下**整个字段不落盘**，不是落一个 0（理由见 StoredTurn 的注释）
+    ...(rec.deathFlip === undefined ? {} : { deathFlip: rec.deathFlip }),
     aliveCount: rec.aliveCount,
     netGrowth: rec.netGrowth,
   };
@@ -172,7 +186,11 @@ export function deserializeTurn(s: StoredTurn, cols: number): TurnRecord | null 
     turn: Number(s.turn) || 0,
     board: boardFromRows(s.board),
     lifeFlip: Number(s.lifeFlip) || 0,
-    deathFlip: Number(s.deathFlip) || 0,
+    // 缺了就是缺了 —— 不补 0。补出来的 0 是一个真实的格号，会让恢复出来的
+    // 单人局看起来像「死之执在 (0,0) 落了一子」
+    ...(typeof s.deathFlip === "number" && Number.isFinite(s.deathFlip)
+      ? { deathFlip: s.deathFlip }
+      : {}),
     aliveCount: Number(s.aliveCount) || 0,
     netGrowth: Number(s.netGrowth) || 0,
   };
@@ -240,6 +258,7 @@ export function loadSession(): LoadResult {
       app: SESSION_APP,
       cols,
       rows: o.rows,
+      mode: o.mode === "solo" ? "solo" : "duel",
       topology: o.topology === "torus" ? "torus" : "bounded",
       rules: (typeof o.rules === "object" && o.rules !== null ? o.rules : {}) as GameRules,
       openingId: typeof o.openingId === "string" ? o.openingId : "",

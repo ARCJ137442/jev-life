@@ -42,7 +42,12 @@ const rules: GameRules = {
  * 当前的占比是怎么算出来的。
  */
 function snap(board: Board, turn: number, ratioHistory: number[]): GameSnapshot {
-  return { board, topology: "bounded", turn, ratioHistory };
+  return { board, mode: "duel", topology: "bounded", turn, ratioHistory };
+}
+
+/** 同一副局面、同一段历史，**单人模式**下的快照 */
+function soloSnap(board: Board, turn: number, ratioHistory: number[]): GameSnapshot {
+  return { board, mode: "solo", topology: "bounded", turn, ratioHistory };
 }
 
 /**
@@ -429,4 +434,71 @@ test("终局判定不改动入参", () => {
   classifyTermination(snap(b, 10, ratios), rules, new Set<string>());
   assert.deepEqual(Array.from(b.cells), before);
   assert.deepEqual(ratios, [0.25, 0.25], "ratioHistory 被改动了");
+});
+
+/* ══════════════════════════════════════════════════════════════════
+   ★ 单人模式（`Mode = "solo"`）
+   ══════════════════════════════════════════════════════════════════
+   单人局里没有死之执，于是好几条**对局级**规则的含义跟着变。这一段钉的就是
+   那些分叉 —— 它们每一条错了都不会报错，只会让单人局按双人规则判。 */
+
+test("★ 单人：棋盘全死**不是** noLegalCell —— 「死之执无处可翻」在单人局里不成立", () => {
+  // 全死棋盘。防抖设成 99 是为了绕开胜负线那一条，单独看 noLegalCell 这个分叉 ——
+  // 否则占比 0 会先命中 deathWinRatio，两条路径都结束对局、分不出差别
+  const dead = createBoard(4, 4);
+  const slow: GameRules = { ...rules, deathStreak: 99, lifeStreak: 99 };
+
+  // 双人：死之执一格都翻不动 → 判死之执胜（棋盘被清空）
+  assert.deepEqual(
+    classifyTermination(snap(dead, 5, []), slow, new Set<string>()),
+    { reason: "noLegalCell", winner: "death" },
+    "双人局里棋盘全死应当是 noLegalCell",
+  );
+
+  // 单人：生之执处处可翻，所以**不查死之执那一侧**。它落在 repeatBlocked 上 ——
+  // 「翻哪一格，演化一代之后都回到这同一副全死局面」，那是真的推不动
+  assert.deepEqual(
+    classifyTermination(soloSnap(dead, 5, []), slow, new Set<string>([boardKey(dead)])),
+    { reason: "repeatBlocked", winner: null },
+    "单人局里棋盘全死不该判任何人胜 —— 没有对手，也没有「被清空」这回事",
+  );
+});
+
+test("★ 单人：占比连续跌破死之执线时，报的是「棋盘死绝」而不是「死之执获胜」", () => {
+  const dead = createBoard(4, 4);
+  // 序列 = [0, 0, 0]，连续 3 回合 ≤ 5%
+  assert.deepEqual(
+    classifyTermination(soloSnap(dead, 8, [0, 0]), rules, new Set<string>()),
+    { reason: "soloDiedOut", winner: null },
+    "单人局没有胜方 —— 胜方为 null，理由另立一条",
+  );
+  // 同一个局面在双人局里仍然是「死之执获胜」
+  assert.deepEqual(classifyTermination(snap(dead, 8, [0, 0]), rules, new Set<string>()), {
+    reason: "deathWinRatio",
+    winner: "death",
+  });
+});
+
+test("★ 单人：生之执占满棋盘仍是 noLegalCell 且判生之执胜（这一条两种模式一致）", () => {
+  const full = boardFromRows(["####", "####", "####", "####"]);
+  assert.deepEqual(
+    classifyTermination(soloSnap(full, 8, []), { ...rules, lifeStreak: 99 }, new Set<string>()),
+    { reason: "noLegalCell", winner: "life" },
+  );
+});
+
+test("★ 单人：repeatBlocked 的胜方不会落到「死之执」上", () => {
+  // 占比冻在死之执线附近、防抖又没满时，双人那条按占比定胜负；
+  // 单人局里把「死之执胜」映成 null（没有对手），不能照抄
+  const b = boardFromRows(["####", "####", "####", "###."]);
+  const seen = new Set<string>([boardKey(b), ...roundSuccessors(b)]);
+  const slow: GameRules = { ...rules, lifeStreak: 99, deathStreak: 99 };
+
+  // 双人：占比 0.9375 ≥ lifeWinRatio → 生之执胜
+  assert.equal(classifyTermination(snap(b, 10, [0.9]), slow, seen)?.winner, "life");
+  // 单人：同一副局面，结论同样是生之执胜（映 null 只针对 death 那一侧）
+  assert.deepEqual(classifyTermination(soloSnap(b, 10, [0.9]), slow, seen), {
+    reason: "repeatBlocked",
+    winner: "life",
+  });
 });

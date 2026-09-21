@@ -221,9 +221,19 @@ export interface TurnRecord {
   readonly turn: number;
   /** 回合结束（双方落子 + 演化一代）后的棋盘 */
   readonly board: Board;
-  /** 本回合双方各自翻的格。落点必然不同格 —— 两边的合法集天然互斥 */
+  /** 本回合**生之执**翻的格 */
   readonly lifeFlip: Cell;
-  readonly deathFlip: Cell;
+  /**
+   * 本回合**死之执**翻的格。
+   *
+   * ⚠ **可选，因为单人模式没有对手那一手**（`Mode = "solo"`）。
+   * 早先它是必填，于是单人模式只能编一个数填进去 —— 而一个编出来的格号
+   * 会一路流进 `recent_history`（喂给模型的记忆）与跑分 CSV，看起来与真的一模一样。
+   *
+   * `undefined` = **这一手不存在**。别把它读成「第 0 格」或「没记录」：
+   * 前者是一个真实的落点，后者是数据缺失，三者含义各不相同。
+   */
+  readonly deathFlip?: Cell;
   readonly aliveCount: number;
   /** 本回合的净增长 = 演化后活细胞数 − 演化前活细胞数 */
   readonly netGrowth: number;
