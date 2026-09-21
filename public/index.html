@@ -619,14 +619,16 @@ textarea{resize:vertical}
       </label>
 
       <!-- 落子相时长 = **整套动画的节奏**：演化在它之后才开始，粒子与选框的
-           存续时间也按同一个倍数走。默认 840ms（0.8s）是原值 420ms 的两倍 ——
-           用户实测一轮太快，看不清「谁在哪儿落了一子」。 -->
+           存续时间也按同一个倍数走。默认 1000ms 是用户看过实物后定的 ——
+           这一相要让人看清「谁在哪儿落了一子」，但也不能慢到打断节奏。 -->
       <div class="slider-row" style="margin-top:11px">
         <span class="tinylbl" style="margin:0" data-i18n="game.flipMs">落子相时长</span>
-        <!-- 步长 20 而不是 100：出厂值 1680 必须**落在网格上**，否则浏览器会把
-             它吸附到最近的合法值，于是「恢复默认」与「刚装好」不是同一个数 -->
-        <input type="range" id="inpFlipMs" min="200" max="5000" step="20" value="1680" data-i18n-title="game.flipMsTitle">
-        <span class="val" id="flipMsVal">1.7s</span>
+        <!-- 步长 20 而不是 100：出厂值必须**落在网格上**，否则浏览器会把它吸附
+             到最近的合法值，于是「恢复默认」与「刚装好」不是同一个数。
+             出厂值本身在 src/client/render.ts 的 FLIP_MS，这里只是它的镜像 ——
+             render.test.ts 有一条守卫断言两者相容。 -->
+        <input type="range" id="inpFlipMs" min="200" max="5000" step="20" value="1000" data-i18n-title="game.flipMsTitle">
+        <span class="val" id="flipMsVal">1.0s</span>
       </div>
       <div class="tinylbl" data-i18n="game.flipMsHint">落子动画、粒子与选框的存续时间；演化一代在它之后才开始。</div>
     </div>

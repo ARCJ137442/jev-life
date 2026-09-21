@@ -25,7 +25,7 @@ import type { Strategy } from "../core/decide.js";
 import type { BackendId } from "./api.js";
 import { BACKENDS } from "./api.js";
 import { detectLang, type Lang } from "./i18n.js";
-// 落子相时长的出厂值住在渲染器里（那里解释了它为什么是 840）——
+// 落子相时长的出厂值住在渲染器里（那里记着它的来历与那次归因教训）——
 // 这里引用它而不是抄一个数字：抄一份的话，改了一处就会得到
 // 「恢复默认之后动画速度与刚装好时不一样」这种没人查得出来的差异
 import { FLIP_MS } from "./render.js";
