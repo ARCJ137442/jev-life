@@ -29,7 +29,13 @@ import { fileURLToPath } from "node:url";
 import { unseal } from "./seal.js";
 import { DEFAULT_TIMEOUT_MS, startTimeout } from "../shared/backend.js";
 import { normalizeQuestionTypes, type Questions } from "../shared/types.js";
-import { extractContent, fromLlmContent, toLlmRequest, usageOf } from "../shared/llm-broker.js";
+import {
+  extractContent,
+  fromLlmContent,
+  toLlmRequest,
+  usageOf,
+  type LlmReasoningEffort,
+} from "../shared/llm-broker.js";
 
 /* ═══════════ 配置 ═══════════ */
 
@@ -363,8 +369,17 @@ async function handleEvaluate(
       sendJson(res, 400, { error: { message: "这条上游需要 questions 字段" } });
       return;
     }
+    // ★ 思考强度由**客户端**给出（界面上那四个控件），但**收敛发生在这里** ——
+    // 因为「谁能收哪些值」取决于本代理背后的真实上游，而那是服务端的知识。
+    // 客户端送的是语义（并集里的某一档，或 null = 「别发这个字段」），
+    // 由 broker 的 clampEffort 按能力表决定发什么、还是不发。
+    // 直接下发 UI 枚举会把整个请求打成 400（ui-spec 第五节第 3 条的实测结论）。
+    const llmOpts = (payload as { llm?: { effort?: LlmReasoningEffort | null } }).llm;
     outgoing = toLlmRequest(up.model, (payload as { state?: unknown }).state, questions, {
       upstream: up.upstream,
+      // 字段缺席 = 客户端没意见 → 交给 toLlmRequest 的默认姿态（none）。
+      // 显式 null = 明确要求不发这个字段 —— 两者必须分开传，见 LlmCallOptions
+      ...(llmOpts && "effort" in llmOpts ? { effort: llmOpts.effort ?? null } : {}),
     });
   } else {
     payload.model = up.model;

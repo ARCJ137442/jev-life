@@ -243,3 +243,49 @@ test("usageOf：报了推理 token 就单独记下来（可占输出的 100%）"
 test("usageOf：整个 usage 缺失时不崩", () => {
   assert.deepEqual(usageOf(null), { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 });
 });
+
+/* ═══ 五、三态 effort：界面「留空」必须送得出去 ═══
+
+   界面上「思考强度 = 留空」是一次**明确的选择**（实测与 none 同为 3/3，而四个
+   显式档位全部劣于不设），它对应「别发这个字段，用上游自己的默认」。
+   如果它与「客户端根本没传」合并成同一个值，那个选项就永远送不出去 ——
+   而它的症状是「设了跟没设一样」，看起来像开关坏了。 */
+
+test("★ effort 三态：省略 = 默认姿态 none；null = 明确不发；档位 = 过能力表", () => {
+  const omitted = toLlmRequest("m", {}, noulQuestions(["flip_1_1"]), { upstream: "agnes" });
+  assert.equal(omitted.reasoning_effort, "none", "省略应当落到默认姿态 none");
+
+  const explicitNull = toLlmRequest("m", {}, noulQuestions(["flip_1_1"]), {
+    upstream: "agnes",
+    effort: null,
+  });
+  assert.ok(
+    !("reasoning_effort" in explicitNull),
+    "显式 null 应当**整个不发**，而不是回落成 none —— 那是两件不同的事",
+  );
+
+  const explicit = toLlmRequest("m", {}, noulQuestions(["flip_1_1"]), {
+    upstream: "agnes",
+    effort: "high",
+  });
+  assert.equal(explicit.reasoning_effort, "high");
+});
+
+test("★ effort=null 时不去查能力表：收不了的上游同样不发（结果一致，理由不同）", () => {
+  const req = toLlmRequest("m", {}, noulQuestions(["flip_1_1"]), {
+    upstream: "没见过的上游",
+    effort: null,
+  });
+  assert.ok(!("reasoning_effort" in req));
+});
+
+test("★ effort=null 时提示词里也不会出现「不要展开推理过程」", () => {
+  // 那一句跟着 `effort === "none"` 走 —— null 是「用上游默认」，
+  // 不该在提示词里替上游做「不许想」的决定
+  const req = toLlmRequest("m", {}, noulQuestions(["flip_1_1"]), {
+    upstream: "agnes",
+    effort: null,
+  });
+  const sys = req.messages.find((m) => m.role === "system")?.content ?? "";
+  assert.ok(!sys.includes("不要展开推理过程"), sys);
+});

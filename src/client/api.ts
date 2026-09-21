@@ -97,6 +97,7 @@ export function isBackendReachable(base: string): boolean {
 export type BackendId =
   | "localproxy"
   | "openrouterproxy"
+  | "llmfree"
   | "vercel"
   | "typesafe"
   | "openrouter"
@@ -128,6 +129,25 @@ export interface BackendConfig {
    * 而两个免费试用后端同样不需要密钥，端点与模型却是本站的内部选择。
    */
   managed: boolean;
+  /**
+   * 这条后端**背后的协议是不是 OpenAI 兼容的 LLM**（即经 broker 包装的那条）。
+   *
+   * 它是「LLM 调用配置」那四个控件的**可见性判据**：思维链 / 是否允许思考 /
+   * 思考强度 / 调用策略只对 LLM 有意义。做成一排点了没反应的死控件，正是本
+   * 项目最该防的那种错 —— 症状与原因无关：用户会以为「关掉思维链没用」，
+   * 其实那个开关根本没接线。
+   */
+  isLlm: boolean;
+  /**
+   * LLM 后端时，**真实上游**的名字 —— 只用来查 `llm-broker` 的能力表
+   * （谁收 `reasoning_effort`、谁不收 `xhigh`）。
+   *
+   * ⚠ 它**不是**给用户看的：界面文案里永远不出现厂商名（与「免费试用」那几条
+   * 同一条纪律）。放在这里是因为能力表按**上游**索引，而界面必须在**下发之前**
+   * 就能标注「该后端不支持，已降级为默认」—— 等请求打完 400 再解释，
+   * 报错离原因就太远了（那正是 ui-spec 第五节第 3 条记的那次）。
+   */
+  llmUpstream?: string;
 }
 
 export const BACKENDS: Record<BackendId, BackendConfig> = {
@@ -139,6 +159,7 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     verified: true,
     managed: true,
     needsKey: false,
+    isLlm: false,
   },
   openrouterproxy: {
     labelKey: "backend.freeTrial2",
@@ -148,6 +169,25 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     verified: true,
     managed: true,
     needsKey: false,
+    isLlm: false,
+  },
+  llmfree: {
+    // 「LLM 免费试用 1」—— 与上面两条**协议不同**，不是同一套转发逻辑的实例。
+    // 上面两条说的是 Jev 协议（SystemOne），这条说的是 OpenAI 兼容协议，
+    // 所以进出都要在服务端过 `llm-broker` 翻译。
+    //
+    // ⚠ 它背后的提供商**不对外暴露**（与上面两条同一条纪律）：界面只显示
+    // 「LLM 免费试用 1」，健康检查只回后端标识，错误文案不含厂商名。
+    // `llmUpstream` 是唯一的例外，而它只用于本地查能力表，不进任何文案。
+    labelKey: "backend.llmFreeTrial",
+    base: "/api/evaluate3",
+    model: "agnes-2.5-flash",
+    noteKey: "backend.llmFreeTrialDesc",
+    verified: false,
+    managed: true,
+    needsKey: false,
+    isLlm: true,
+    llmUpstream: "agnes",
   },
   vercel: {
     labelKey: "backend.vercel",
@@ -157,6 +197,7 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     verified: true,
     managed: false,
     needsKey: true,
+    isLlm: false,
   },
   typesafe: {
     labelKey: "backend.typesafe",
@@ -166,6 +207,7 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     verified: true,
     managed: false,
     needsKey: true,
+    isLlm: false,
   },
   openrouter: {
     labelKey: "backend.openrouter",
@@ -175,6 +217,7 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     verified: true,
     managed: false,
     needsKey: true,
+    isLlm: false,
   },
   laya: {
     labelKey: "backend.laya",
@@ -184,6 +227,7 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     verified: false,
     managed: false,
     needsKey: false,
+    isLlm: false,
   },
   lmstudio: {
     labelKey: "backend.custom",
@@ -193,6 +237,7 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     verified: false,
     managed: false,
     needsKey: false,
+    isLlm: false,
   },
 };
 

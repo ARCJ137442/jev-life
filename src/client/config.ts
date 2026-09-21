@@ -21,6 +21,9 @@
  */
 import type { Role, Topology } from "../core/types.js";
 import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
+// 只借它的**类型**：能力表（谁收哪些档位）住在 broker 里，界面不另抄一份
+// —— 抄一份的话，往能力表里加一个上游时界面会照旧标注「不支持」
+import type { LlmReasoningEffort } from "../shared/llm-broker.js";
 import type { Channel } from "../core/channels.js";
 import type { Strategy } from "../core/decide.js";
 import type { BackendId } from "./api.js";
@@ -119,9 +122,45 @@ export interface RoleSettings {
   ruleNote: string;
   /** 策略提示 → aids.strategy_hint */
   strategyHint: string;
-  /* ⚠ 将来要加的四项 —— 思维链开关 / 是否允许思考 / 思考强度 / 调用策略 ——
-     等 `llm-json` / `llm-tool` 适配器落地时一并加，完整理由见 `main.ts`
-     策略抽屉顶部那段注释。在那之前它们没有消费者，加进来就是死配置。 */
+
+  /* ══════════ LLM 调用配置（只在选用 LLM 后端时有消费者）══════════
+   *
+   * 四项都**持久化**：换回 Jev 后端再换回来，设置还在（ui-spec 第五节）。
+   * 它们描述的是「怎么跟模型谈」，而玩家级设置本来就是「描述这个玩家怎么想」。
+   *
+   * ⚠ 这四个值**不直接下发**。UI 的枚举是面向多后端的**并集**，而各上游收的
+   * 值不一样（实测：agnes 的 `reasoning_effort` 只接受 none|low|medium|high|max，
+   * **不收 xhigh**，直接发会 400 把整个决策请求打掉）。真正的收敛由
+   * `llm-broker` 的 `capabilitiesOf()` / `clampEffort()` 做 —— 见 `main.ts`
+   * 的 `llmCallOf()`。
+   */
+
+  /**
+   * 思维链开关（默认**关**）。
+   *
+   * 实测：两个后端都从 0–63% 升到 **100%**，快 5–40 倍，推理 token 归零。
+   * 更硬的理由是它**从结构上消灭了「推理吃光预算」这个失败模式** ——
+   * 那是观察到的唯一失败原因。
+   */
+  chainOfThought: boolean;
+  /**
+   * 是否允许思考（是 / 否 / 留空）。默认留空。
+   *
+   * 与 `effort === "none"` 语义重叠，所以两者是**耦合**的：前者选「否」时
+   * 强度显示 `none`；强度选 `none` 时前者自动显示「否」。
+   */
+  allowThinking: "" | "yes" | "no";
+  /**
+   * 思考强度。默认**留空**。
+   *
+   * ⚠ 实测六个档位里只有 `none` 与「留空」能跑通，四个显式档位全部劣于不设
+   * （3/3 → 0–1/3）。所以界面上必须带那句警示 —— **保留控件、默认留空、
+   * 把实测写进提示**，让人知情地选（只有一个后端的数据，别家可能不同，
+   * 所以不建议直接删掉控件）。
+   */
+  effort: "" | LlmReasoningEffort;
+  /** 调用策略：JSON 输出 / 工具循环。默认 JSON（实测快 2–4 倍） */
+  callPolicy: "json" | "tool";
 }
 
 /** 非敏感的重试参数。两个玩家共用 —— 它描述的是「本机怎么等」，不是「这个玩家怎么想」 */
@@ -232,6 +271,10 @@ export function defaultRole(): RoleSettings {
     detectPatterns: true,
     ruleNote: "",
     strategyHint: "",
+    chainOfThought: false,
+    allowThinking: "",
+    effort: "",
+    callPolicy: "json",
   };
 }
 
@@ -385,7 +428,27 @@ function readRole(raw: unknown): RoleSettings {
     detectPatterns: raw.detectPatterns === undefined ? d.detectPatterns : raw.detectPatterns === true,
     ruleNote: typeof raw.ruleNote === "string" ? raw.ruleNote : d.ruleNote,
     strategyHint: typeof raw.strategyHint === "string" ? raw.strategyHint : d.strategyHint,
+    // 认不出的档位一律回落到「留空」（= 用上游默认）。**不往最近的档位上凑**：
+    // 降级成 none 会悄悄改语义（用户要的是「多想一点」，你给它「不许想」），
+    // 而降级成别的档位更是凭空替用户做了决定 —— 与 clampEffort 同一条理由
+    chainOfThought: raw.chainOfThought === true,
+    allowThinking:
+      raw.allowThinking === "yes" || raw.allowThinking === "no" ? raw.allowThinking : "",
+    effort: isEffort(raw.effort) ? raw.effort : "",
+    callPolicy: raw.callPolicy === "tool" ? "tool" : "json",
   };
+}
+
+/** 认得出的思考强度档位。与 `llm-broker` 的并集同源，但**在运行时**校验 */
+function isEffort(v: unknown): v is LlmReasoningEffort {
+  return (
+    v === "none" ||
+    v === "low" ||
+    v === "medium" ||
+    v === "high" ||
+    v === "xhigh" ||
+    v === "max"
+  );
 }
 
 export function load(): Persisted {

@@ -35,7 +35,13 @@
  * —— 它自己不 import 任何运行时代码，所以不会把 `.js` 后缀的问题带进来。
  * **将来给 broker 加运行期依赖时，这条会断，要重新想办法。**
  */
-import { extractContent, fromLlmContent, toLlmRequest, usageOf } from "../src/shared/llm-broker.ts";
+import {
+  extractContent,
+  fromLlmContent,
+  toLlmRequest,
+  usageOf,
+  type LlmReasoningEffort,
+} from "../src/shared/llm-broker.ts";
 import type { Questions } from "../src/shared/types.js";
 
 /** Vercel 注入的最小请求/响应形状（只声明用到的部分，避免依赖 @vercel/node） */
@@ -290,8 +296,17 @@ export function makeHandler(up: Upstream) {
         res.status(400).json({ error: { message: "这条上游需要 questions 字段" } });
         return;
       }
+      // ★ 思考强度由客户端给出（界面上那四个控件），但**收敛发生在这里** ——
+      // 谁能收哪些值取决于本代理背后的真实上游，那是服务端的知识。
+      // 客户端送语义（并集里的某一档，或 null = 「别发这个字段」），
+      // 由 broker 的 clampEffort 按能力表决定发什么、还是不发。
+      // 与 `src/server/server.ts` 是同源的重复，**改一处记得改另一处**
+      const llmOpts = (body as { llm?: { effort?: LlmReasoningEffort | null } }).llm;
       outgoing = toLlmRequest(up.model, (body as { state?: unknown }).state, questions, {
         upstream: up.upstream,
+        // 字段缺席 = 客户端没意见 → toLlmRequest 的默认姿态（none）；
+        // 显式 null = 明确要求不发这个字段。两者必须分开传
+        ...(llmOpts && "effort" in llmOpts ? { effort: llmOpts.effort ?? null } : {}),
       });
     } else {
       // 判别值在这里归一化 —— 客户端发的是语义（noul），拼成什么样由**本上游**决定

@@ -147,7 +147,17 @@ export function toLlmRequest(
   questions: Questions,
   opts: {
     readonly upstream: string;
-    readonly effort?: LlmReasoningEffort;
+    /**
+     * 期望的思考强度。**三态**（与 `shared/backend.ts` 的 `LlmCallOptions.effort` 同源）：
+     *
+     *   - 省略 → 用默认姿态 `none`（关思维链），这是实测最好的那一档
+     *   - `null` → **明确要求「不发这个字段」**，用上游自己的默认
+     *   - 具体档位 → 过 `clampEffort`，收不了就不发
+     *
+     * `null` 不能与「省略」合并：界面上「留空」是一次明确的选择
+     * （实测与 `none` 同为 3/3，而四个显式档位全部劣于不设）。
+     */
+    readonly effort?: LlmReasoningEffort | null;
     readonly maxTokens?: number;
   },
 ): LlmRequest {
@@ -162,6 +172,12 @@ export function toLlmRequest(
     ...lines,
   ].join("\n");
 
+  // ⚠ 这一行判的是**调用方显式传了 `"none"`**，而不是「最终下发的 effort 是 none」。
+  // 于是默认路径（调用方省略 effort）下：请求体里带着 `reasoning_effort: "none"`，
+  // 提示词里却**没有**这句「直接给出答案」。两者说的其实是同一件事。
+  // 没顺手改的理由：提示词是**实验变量**，而这条不一致没有实测依据支撑改哪一边
+  // （`docs/llm-backends.md` 那张成功率表来自探针脚本，不是这份提示词）。
+  // 要改之前先测 —— 别把它当成一处笔误。
   const system = [
     SYS_PREFIX,
     opts.effort === "none" ? "直接给出答案，不要展开推理过程。" : "",
@@ -171,8 +187,12 @@ export function toLlmRequest(
     .join(" ");
 
   // 关思维链是**默认姿态**（实测依据见文件头）。上游不认识这个字段就**整个不发** ——
-  // 不能回落到 "none"：那是在猜它能收，而猜错的代价是整个请求 400
-  const effort = clampEffort(opts.effort ?? "none", opts.upstream);
+  // 不能回落到 "none"：那是在猜它能收，而猜错的代价是整个请求 400。
+  //
+  // 调用方显式给 `null` 时**直接不发**，连能力表都不查：那是「用上游自己的默认」
+  // 这个明确要求，与「默认姿态是 none」不是一回事（见 opts.effort 的注释）。
+  const effort =
+    opts.effort === null ? undefined : clampEffort(opts.effort ?? "none", opts.upstream);
 
   return {
     model,

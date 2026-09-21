@@ -237,6 +237,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.freeTrialDesc": "本站代管的免费额度，开箱即用，不需要密钥",
     "backend.freeTrial2": "免费试用 2",
     "backend.freeTrial2Desc": "本站代管的第二份免费额度",
+    "backend.llmFreeTrial": "LLM 免费试用 1",
+    "backend.llmFreeTrialDesc":
+      "本站代管的免费 LLM 额度。它背后是一个通用的语言模型，由 broker 包装成 Jev 兼容接口 —— 对上层完全一样，只是**慢得多、要花 token**。选中它之后 API 抽屉里会多出四个调用配置。",
     "backend.vercel": "Vercel AI Gateway 直连",
     "backend.vercelDesc": "自己带密钥，额度归你掌控。",
     "backend.typesafe": "TypeSafe 官方",
@@ -648,6 +651,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.freeTrialDesc": "A free quota hosted by this site; works out of the box, no key needed",
     "backend.freeTrial2": "Free trial 2",
     "backend.freeTrial2Desc": "A second free quota hosted by this site",
+    "backend.llmFreeTrial": "LLM free trial 1",
+    "backend.llmFreeTrialDesc":
+      "A free LLM quota hosted by this site. Behind it is a general-purpose language model, wrapped into a Jev-compatible interface by the broker — identical from above, just far slower and metered in tokens. Selecting it adds four call settings to the API drawer.",
     "backend.vercel": "Vercel AI Gateway (direct)",
     "backend.vercelDesc": "Bring your own key; the quota is yours to control.",
     "backend.typesafe": "TypeSafe official",

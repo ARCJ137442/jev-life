@@ -27,6 +27,7 @@
  * 实现能同时供浏览器（`client/api.ts`）与无头 CLI（`tools/play.ts`）使用。
  */
 import type { Answer, JevResponse, Questions } from "./types.js";
+import type { LlmReasoningEffort } from "./llm-broker.js";
 
 /* ══════════════════════════════════════════════════════════════════
    形状
@@ -104,10 +105,40 @@ const MAX_BACKOFF_MS = 30_000;
 /** 单次请求的超时上限。Jev 一次并行决策是秒级，60 秒已经很宽裕 */
 export const DEFAULT_TIMEOUT_MS = 60_000;
 
+/**
+ * LLM 调用配置 —— 只在后端是「经 broker 包装的 LLM」时有意义。
+ *
+ * ═══ 它为什么在**请求体**里 ═══
+ *
+ * 翻译（Jev 形状 → LLM 形状）发生在服务端，而出题目的客户端才知道用户
+ * 在界面上选了什么。所以这四个控件的取值必须跟着请求体走一趟 ——
+ * 这是「UI 的枚举不能直接下发」那条硬性要求的前半段：客户端送**语义**，
+ * 服务端按**上游能力**收敛成真正能发的值。
+ *
+ * ⚠ 后端不是 LLM 时这个字段**整个不出现**。Jev 协议的后端不认识它，
+ * 而发一个没人看的字段等于给上游送一个未知参数。
+ */
+export interface LlmCallOptions {
+  /**
+   * 期望的思考强度。**三态，缺一不可**：
+   *
+   *   - 具体档位 → 期望下发它；服务端仍会过一遍能力表，收不了就不发
+   *   - `null`   → **明确要求「不发这个字段」**，用上游自己的默认
+   *   - 省略     → 客户端没意见，按 broker 的默认姿态（`none`，即关思维链）
+   *
+   * `null` 与「省略」必须分开：界面上「思考强度 = 留空」是一个**明确的
+   * 选择**（实测它与 `none` 同为 3/3，而四个显式档位全部劣于不设），
+   * 把它与「客户端根本没传」混成一件事，那个选项就永远送不出去。
+   */
+  readonly effort?: LlmReasoningEffort | null;
+}
+
 export interface DecisionRequest {
   readonly model: string;
   readonly state: unknown;
   readonly questions: Questions;
+  /** 见 `LlmCallOptions`。非 LLM 后端不传 */
+  readonly llm?: LlmCallOptions;
 }
 
 /**
@@ -289,6 +320,7 @@ async function callOnce(
   fetchImpl: FetchLike,
   timeoutMs: number,
   model: string,
+  llm: LlmCallOptions | undefined,
 ): Promise<DecisionResult> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
 
@@ -297,10 +329,14 @@ async function callOnce(
   if (cfg.apiKey && !isProxy) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
 
   const url = cfg.base;
-  const body: { model: string; state: unknown; questions: Questions } = {
+  const body: { model: string; state: unknown; questions: Questions; llm?: LlmCallOptions } = {
     model,
     state,
     questions,
+    // 非 LLM 后端**整个字段不出现**（理由见 LlmCallOptions）。这里不写
+    // `llm: undefined`：那在 JSON.stringify 里会消失，但在抓请求体的测试里
+    // 会让人以为「字段在，只是空的」—— 两件事看起来一样、含义不同
+    ...(llm === undefined ? {} : { llm }),
   };
 
   const dl = startTimeout(timeoutMs);
@@ -375,6 +411,8 @@ export interface CallOptions {
   readonly timeoutMs?: number;
   /** 覆盖 `cfg.model`。适配器把 `DecisionRequest.model` 从这里送进来 */
   readonly model?: string;
+  /** LLM 调用配置。适配器把 `DecisionRequest.llm` 从这里送进来 */
+  readonly llm?: LlmCallOptions;
   /** 注入用。测试与无头工具靠它复用同一条路径 */
   readonly fetchImpl?: FetchLike;
   readonly hooks?: CallHooks;
@@ -406,7 +444,7 @@ export async function callJev(
   for (;;) {
     calls++;
     try {
-      const r = await callOnce(cfg, state, questions, fetchImpl, timeoutMs, model);
+      const r = await callOnce(cfg, state, questions, fetchImpl, timeoutMs, model, opts.llm);
       return { ...r, latencyMs: Date.now() - startedAt, upstreamCalls: calls };
     } catch (e) {
       const err = e instanceof JevError ? e : new JevError(String(e), undefined, false);
@@ -443,6 +481,9 @@ export function createSystemoneBackend(
       callJev(cfg, req.state, req.questions, {
         ...opts,
         model: req.model,
+        // 请求上的配置优先于构造时的配置：同一个后端实例可能被不同玩家级
+        // 设置复用，而「这一次调用怎么谈」是跟着**请求**走的
+        llm: req.llm ?? opts.llm,
         hooks: hooks ?? opts.hooks,
       }),
   };
