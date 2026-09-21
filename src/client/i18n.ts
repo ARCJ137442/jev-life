@@ -208,7 +208,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- 策略抽屉 ---------- */
     "strategy.desc":
-      "分两部分：上下文决定 Jev 看到什么，规则决定拿到答案后怎么落实。每一项都是玩家级的 —— 两边可以配得不一样。",
+      "分两部分：上下文决定 Jev 看到什么，规则决定拿到答案后怎么落实。每一项都是玩家级的 —— 每个玩家各配一套。",
     "strategy.perRoleNote":
       "后端 / 模型 / 上下文都绑在单个玩家上：跨模型对照（Jev 当生执、LLM 当死执）正是靠它才配得出来。",
     "strategy.sync": "把「{from}」的设置复制给「{to}」",
@@ -301,7 +301,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "strategy.noHeuristic":
       "本 Demo 不含启发式兜底：拿不准时不换别的算法，而是把不确定性标出来交给你判断。",
     "strategy.reset": "恢复默认",
-    "strategy.resetTitle": "当前玩家的上下文与规则回到出厂值（另一方不受影响）",
+    // 「另一方不受影响」在单人局里是一句关于不存在的人的话，改成只说「谁被改到」
+    "strategy.resetTitle": "当前选中的玩家：上下文与规则回到出厂值（只影响这一个玩家）",
     "strategy.done": "完成",
 
     /* ---------- API 抽屉 ---------- */
@@ -591,7 +592,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- 二次确认 ---------- */
     "confirm.gameReset": "尺寸、拓扑、终局规则、开局、动效全部回到出厂值，并重开一局？",
-    "confirm.strategyReset": "当前玩家的上下文与规则回到出厂值？（另一方不受影响）",
+    "confirm.strategyReset": "当前选中玩家的上下文与规则回到出厂值？（只影响这一个玩家）",
     "confirm.apiReset": "自动重试参数回到出厂值？（后端与密钥不受影响）",
     "confirm.logClear": "清空全部调用日志？此操作不可撤销。",
     "confirm.wipeAll": "清除本机全部存档（设置、对局、日志）并重新载入？",
@@ -756,7 +757,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- Strategy drawer ---------- */
     "strategy.desc":
-      "Two parts: context decides what Jev sees, rules decide what happens to its answer. Everything here is player-level — the two sides may differ.",
+      "Two parts: context decides what Jev sees, rules decide what happens to its answer. Everything here is player-level — each player has their own set.",
     "strategy.perRoleNote":
       "Backend, model and context are bound to a single player: that is the only way to configure a cross-model comparison (Jev as Life, an LLM as Death).",
     "strategy.sync": "Copy “{from}” settings to “{to}”",
@@ -840,7 +841,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "strategy.noHeuristic":
       "No heuristic fallback: when Jev is unsure we do not quietly swap in another algorithm, we surface the uncertainty for you to judge.",
     "strategy.reset": "Reset to defaults",
-    "strategy.resetTitle": "This player's context and rules go back to factory values (the other side is untouched)",
+    "strategy.resetTitle": "The currently selected player's context and rules go back to factory values (only this player is touched)",
     "strategy.done": "Done",
 
     /* ---------- API drawer ---------- */
@@ -1127,7 +1128,7 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- Confirmations ---------- */
     "confirm.gameReset": "Reset size, topology, end rules, opening and effects to factory values, and restart the game?",
-    "confirm.strategyReset": "Reset this player's context and rules to factory values? (the other side is untouched)",
+    "confirm.strategyReset": "Reset the currently selected player's context and rules to factory values? (only this player is touched)",
     "confirm.apiReset": "Reset the retry parameters to factory values? (backend and key are untouched)",
     "confirm.logClear": "Clear the whole call log? This cannot be undone.",
     "confirm.wipeAll": "Delete every local archive (settings, game, log) and reload?",

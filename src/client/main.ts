@@ -2079,6 +2079,17 @@ function syncModeUi(): void {
     // 赋值在语言切换后依然生效
     if (!gone) b.textContent = t(role === "life" ? m.lifeLabel : "log.roleDeath");
   }
+  // 「复制到另一方」：单人局里没有另一方。
+  //
+  // ⚠ 不收起它的后果比按钮多藏一步 —— 点下去会弹「把「玩家」的设置复制给
+  // 「死之执」」，而死之执那一栏根本不在界面上、设置也一项都用不到。
+  // **复制给一个不存在的对手**会让用户以为那一边还活着。
+  //
+  // 与上面那组 roletab 一起收：它们是「单人局只有一个行动方」这件事在
+  // 界面上剩下的最后两处痕迹（`mode.ts` 的 `syncVisible`）
+  for (const el of document.querySelectorAll<HTMLElement>(".syncrow")) {
+    el.style.display = m.syncVisible ? "" : "none";
+  }
   $("roleHint").textContent = t(m.roleHint);
   $("apiRoleNote").textContent = t(m.roleHint);
   // 模式下拉下面那段说明：选到什么就读什么（原先写死讲单人）

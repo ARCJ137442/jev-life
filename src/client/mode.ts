@@ -56,6 +56,20 @@ export interface ModeUi {
    * （图例整块收起了，里面某一项还在被单独地设成 `display:none`）。
    */
   readonly legendVisible: boolean;
+  /**
+   * 「把设置复制到另一方」那两颗按钮是否显示（策略抽屉一颗、API 抽屉一颗）。
+   *
+   * ⚠ 它们是**唯一的那个消费者**会在界面上说出「另一个行动方」的存在的地方 ——
+   * 单人局里点下去会弹出「把「玩家」的设置复制给「死之执」」，而死之执那一栏
+   * 根本不在界面上、设置也一项都用不到。**复制给一个不存在的对手**比按钮本身
+   * 更糟：它让用户以为那一边还活着。
+   *
+   * 与 `deathColumnEnabled` 是同一条理由（单人局里只有一个行动方），
+   * 但**不是同一个开关**：那个说的是「那一栏在不在」，这个说的是
+   * 「两边之间还有没有东西可搬」。将来若出现一种「有第二栏但不该复制」的
+   * 模式，它们会分家。
+   */
+  readonly syncVisible: boolean;
   /** 死之执那条胜负线的标签。单人局里它说的是「棋盘死绝」 */
   readonly deathWinLabel: string;
   /**
@@ -120,6 +134,7 @@ const DUEL: ModeUi = {
   solo: false,
   deathColumnEnabled: true,
   legendVisible: true,
+  syncVisible: true,
   deathWinLabel: "game.deathWin",
   lifeWinLabel: "game.lifeWin",
   lifeLabel: "log.roleLife",
@@ -137,16 +152,21 @@ const DUEL: ModeUi = {
 };
 
 /**
- * 单人局：只有生之执在走。
+ * 单人局：**只有一个行动方**（玩家，生死一体）。
  *
  * 死之执那一栏的每一项都失去消费者（后端 / 模型 / 密钥 / 上下文 / 策略 /
- * 模板 —— 它一次都不会被调用），所以整栏停用；而**胜负线不停用**，
- * 它变成「棋盘死绝」的判据，只换措辞。
+ * 模板 —— 它一次都不会被调用），所以整栏**收起**（不是置灰：
+ * 留一个点不动的「死之执」标签是在指一个不存在的人）。跟着一起收的还有
+ * 双侧同步按钮与置信度图的图例。
+ *
+ * 而**两条胜负线都不收起** —— 它们仍然生效，只是换了说法：
+ * 玩家那条是同一个行动方换了称呼，「死之执那条」变成「棋盘死绝」的判据。
  */
 const SOLO: ModeUi = {
   solo: true,
   deathColumnEnabled: false,
   legendVisible: false,
+  syncVisible: false,
   deathWinLabel: "game.deathWinSolo",
   lifeWinLabel: "game.lifeWinSolo",
   lifeLabel: "log.rolePlayer",

@@ -94,6 +94,13 @@ test("★ 单人局必须**收起**死之执那一栏，并收起它的图例", 
     false,
     "单人局只有一条黄带，图例里没有任何一项对得上它 —— 用户定的是「无需图例」",
   );
+
+  assert.equal(duel.syncVisible, true);
+  assert.equal(
+    solo.syncVisible,
+    false,
+    "单人局里没有另一方 —— 留着「复制到另一方」会弹出「复制给死之执」，而那一栏根本不在界面上",
+  );
   assert.equal(solo.solo, true);
   assert.equal(duel.solo, false);
 });
