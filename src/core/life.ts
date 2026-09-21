@@ -1,4 +1,12 @@
-import type { Board, Cell, Role, Topology } from "./types.js";
+import type {
+  Board,
+  Cell,
+  GameRules,
+  GameSnapshot,
+  Role,
+  Termination,
+  Topology,
+} from "./types.js";
 import { MAX_SIZE, MIN_SIZE } from "./types.js";
 
 /**
@@ -344,4 +352,117 @@ export function lifeStep(b: Board, topo: Topology): Board {
     next[i] = cells[i] ? (n === 2 || n === 3 ? 1 : 0) : n === 3 ? 1 : 0;
   }
   return { cols, rows, cells: next };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   T7 · 状态哈希与终局判定
+   ═══════════════════════════════════════════════════════════════ */
+
+/**
+ * 棋盘的状态哈希，用于 repeatBlocked 检测的 `seen` 集合。
+ *
+ * **必须带上尺寸**：不带的话 4×4 全死与 5×5 全死都是「一长串 0」，
+ * 而它们是不同的局面（合法落点、后继、占比全都不同）。尺寸前缀一并解决
+ * 了「cells 长度不是 4 的倍数时末位补 0」带来的跨尺寸歧义。
+ *
+ * 每 4 格打包成一个 hex 数字：格子只有 0/1 两个值，nibble 里剩下的位恒为 0，
+ * 所以同尺寸下这个编码是单射 —— 不会有两个不同棋盘撞同一个 key。
+ */
+export function boardKey(b: Board): string {
+  let out = `${b.cols}x${b.rows}:`;
+  for (let i = 0; i < b.cells.length; i += 4) {
+    let nib = 0;
+    for (let k = 0; k < 4 && i + k < b.cells.length; k++) nib |= b.cells[i + k] << k;
+    out += nib.toString(16);
+  }
+  return out;
+}
+
+/** 从序列末尾往前数，连续满足 pred 的个数。防抖计数用它 —— 一旦断了就归零重数 */
+function trailingRun(xs: readonly number[], pred: (x: number) => boolean): number {
+  let n = 0;
+  for (let i = xs.length - 1; i >= 0; i--) {
+    if (!pred(xs[i])) break;
+    n++;
+  }
+  return n;
+}
+
+/** 走投无路时按当前占比定胜负：越界判该方胜，夹在中间判和局 */
+function ratioWinner(ratio: number, rules: GameRules): Role | null {
+  if (ratio >= rules.lifeWinRatio) return "life";
+  if (ratio <= rules.deathWinRatio) return "death";
+  return null;
+}
+
+/**
+ * 终局判定。返回 null 表示对局继续。
+ *
+ * ═══ 判定顺序是有讲究的，不能重排 ═══
+ *
+ *   1. 连续越界 ≥ 该侧 streak → 判该方胜
+ *   2. 当前行动方无合法动作（noLegalCell / repeatBlocked）→ 按当前占比定胜负
+ *   3. 回合上限 → 和局
+ *
+ * 第 1 条排最前，因为那是玩家主动争取的目标 —— 已经赢到手的东西不该被
+ * 「正好这回合也没棋可走」改写成一个不同的原因（更不该变成和局）。
+ *
+ * 第 2 条排在第 3 条之前：无棋可走与回合上限同时成立时，「走投无路」是更具体的
+ * 那个原因，回合上限只是兜底。两者都判和局的话，报哪个原因会影响 UI 上的复盘文案。
+ *
+ * 第 2 条那半句「按占比定胜负」是刻意加的：防抖的作用是**挡住一代走运就赢**，
+ * 而游戏既然已经因为别的原因要结束了，再卡防抖就会出现「棋盘全活、生之执却
+ * 因为只持续了一代而判和局」这种说不通的结果。
+ *
+ * 两侧胜负线不会同时触发 —— 两条线判的都是**末尾**的连续序列，
+ * 而同一个占比不可能既 ≥ lifeWinRatio 又 ≤ deathWinRatio（0.6 > 0.05）。
+ *
+ * ═══ 调用方的契约 ═══
+ *
+ * `seen` 必须由调用方构造并**包含当前局面**（当前局面当然是「见过的」），
+ * 之后每走一回合把新局面的 key 加进去。函数只读它，不改它。
+ *
+ * 注意 `seen` 是**按角色**使用的：生执与死执的合法集互斥，后继自然也不同，
+ * 所以一方走投无路不代表另一方也是。这正是 `role` 参数不可省的原因。
+ *
+ * 本函数不改动任何入参（引擎纯度的硬约束，见文件头）。
+ */
+export function classifyTermination(
+  snap: GameSnapshot,
+  role: Role,
+  rules: GameRules,
+  seen: ReadonlySet<string>,
+): Termination | null {
+  const { board, topology } = snap;
+
+  // 当前占比现算，不存两份真相。历史 + 当前拼成一条序列再数末尾连续段：
+  // 当前这一代是刚演化完的，必须参与计数。
+  const ratio = aliveCount(board) / (board.cols * board.rows);
+  const series = [...snap.ratioHistory, ratio];
+
+  // 1. 胜负线
+  if (trailingRun(series, (v) => v >= rules.lifeWinRatio) >= rules.lifeStreak) {
+    return { reason: "lifeWinRatio", winner: "life" };
+  }
+  if (trailingRun(series, (v) => v <= rules.deathWinRatio) >= rules.deathStreak) {
+    return { reason: "deathWinRatio", winner: "death" };
+  }
+
+  // 2. 无棋可走。先判空集再判重复 —— 两者是不同情况，不能合并。
+  //    空集若不先判，下面的 every 会对空数组返回 true，把 noLegalCell 误报成 repeatBlocked。
+  const options = legalCells(board, role);
+  if (options.length === 0) {
+    return { reason: "noLegalCell", winner: ratioWinner(ratio, rules) };
+  }
+  const everyOptionRepeats = options.every((cell) =>
+    seen.has(boardKey(lifeStep(flip(board, cell), topology))),
+  );
+  if (everyOptionRepeats) {
+    return { reason: "repeatBlocked", winner: ratioWinner(ratio, rules) };
+  }
+
+  // 3. 回合上限
+  if (snap.turn >= rules.turnLimit) return { reason: "turnLimit", winner: null };
+
+  return null;
 }
