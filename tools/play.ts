@@ -516,6 +516,28 @@ function topFive(board: Board, probs: CellProbabilities): string {
  * 于是 CLI 拿到手只剩一句「该免费后端暂时不可用」—— 有信息量的是零。
  * 第一次真跑就撞上了这个，所以这段提示是实测逼出来的，不是想象出来的。
  */
+/**
+ * 从 `--base` 猜它背后是哪个网关。**猜不到就返回 null**，不硬编一个答案。
+ *
+ * 后两条规则认的是本机代理的路由名（`/api/evaluate` → Vercel，`evaluate2` →
+ * OpenRouter）。这是 `src/server/server.ts` 的上游表在这里的第二份副本 ——
+ * 它只用来**提示**，不参与任何判定，所以走样了顶多是一句提示不准，
+ * 不会让一局棋跑错。真要加第三个代理时记得同步。
+ */
+function upstreamOfBase(base: string): string | null {
+  if (base.includes("ai-gateway.vercel.sh")) return "vercel";
+  if (base.includes("openrouter.ai")) return "openrouter";
+  if (base.includes("api.typesafe.ai")) return "typesafe";
+  if (/\/api\/evaluate2(\/|$)/.test(base)) return "openrouter";
+  if (/\/api\/evaluate(\/|$)/.test(base)) return "vercel";
+  return null;
+}
+
+/** 某个网关要的布尔判别值 —— 与 `noulDiscriminator` 同一套事实 */
+function noulDiscriminatorHint(upstream: string): string {
+  return upstream === "vercel" ? "boolean" : "noul";
+}
+
 function fail(e: unknown, args: Args): never {
   const status = (e as { status?: number }).status;
   const message = (e as Error).message;
@@ -525,14 +547,32 @@ function fail(e: unknown, args: Args): never {
   console.error(`✗ 这一局没跑成：${message}`);
 
   if (typeof status === "number" && status >= 400 && status < 500) {
+    const upstream = upstreamOfBase(args.base);
     const used = args.backend === "vercel" ? "boolean" : `noul（--backend 「${args.backend}」）`;
+
     console.error("");
-    console.error("  上游 4xx。最可能的原因是**布尔类型的判别值选错了** ——");
-    console.error("  四个网关不一致：Vercel 用 boolean，官方 / OpenRouter / AI-ML-API 用 noul。");
-    console.error(`  这一次发出去的判别值是 ${used}。`);
-    console.error("  本机服务器的 /api/evaluate 转发到的是 Vercel 网关，所以要 --backend vercel。");
-    console.error("  上游原文不在回包里（代理刻意不透传，免得把上游选型泄给浏览器），");
-    console.error("  它在**本机服务器的日志**里 —— 那行「上游原文：」就是答案。");
+    console.error("  上游 4xx。回包里**没有**上游原文（代理刻意不透传，免得把上游选型泄给");
+    console.error("  浏览器），所以下面列的是可能的原因，不是结论 —— 那行「上游原文：」在");
+    console.error("  本机服务器的日志里，它才是答案。常见两种：");
+    console.error("");
+    if (status === 402 || status === 403 || status === 429) {
+      console.error(`  · 额度 / 鉴权（HTTP ${status} 通常就是这个）：该后端已用尽、被限流，或者密钥失效。`);
+    }
+    console.error(`  · 判别值选错：四个网关不一致 —— Vercel 用 boolean，官方 / OpenRouter /`);
+    console.error(`    AI-ML-API 用 noul。这一次发的是 ${used}。`);
+    if (upstream !== null) {
+      // 比的是**判别值**而不是后端 id：noul 是好几家的默认值，id 不同但值一样时
+      // 提示「加 --backend xxx」会让人去改一个本来就对的参数
+      const need = noulDiscriminatorHint(upstream);
+      console.error(
+        `    --base 看起来指向 ${upstream}，它要的是 ${need}` +
+          (need === (args.backend === "vercel" ? "boolean" : "noul")
+            ? "（判别值已经对了，那 4xx 不是这个原因）"
+            : `（加 --backend ${upstream}）`),
+      );
+    } else {
+      console.error("    --base 背后是哪个网关看不出来，所以要你自己核对判别值。");
+    }
   }
 
   if (message.includes("无法连接")) {
