@@ -42,6 +42,7 @@ import { detectPatterns } from "./patterns.js";
 import type { DetectedPattern } from "./patterns.js";
 import { noulDiscriminator } from "../shared/types.js";
 import type { Question, Questions, TurnRecord } from "../shared/types.js";
+import type { Channel } from "./channels.js";
 import type { Board, Cell, GameRules, Role, Topology } from "./types.js";
 
 /* ══════════════════════════════════════════════════════════════════
@@ -412,28 +413,14 @@ export function buildState(input: StateInput): JevState {
 
 /* ══════════════════════════════════════════════════════════════════
    buildQuestions
-   ══════════════════════════════════════════════════════════════════ */
+   ══════════════════════════════════════════════════════════════════
 
-export type FilterId = string;
+   `Channel`（三条通道的类型）住在 `channels.ts` —— 那边同时管着**回包怎么读**
+   （`parseAnswers`）。词汇与解析放在一处，省得「题面在这边、答案在那边」
+   两边各演化一次。本模块只负责按通道组题。
 
-/**
- * 评估通道。
- *
- * **一条通道 = 一个请求**：`buildQuestions` 返回**完整的** `Questions` record，
- * 调用方把它一次性发出去，**绝不循环**。理由不只是省往返 —— 计划里的实测是
- * 「上下文越短越可靠」：每多一次调用就多一次静默失败的机会（思维链吃光
- * max_tokens → content 为空 → 工具调用为零）。
- *
- * M1 只实现 `noul-all`，另外两条先留类型（T13 补）。
- *
- * `backend` 放在通道上而不在 `StateInput` 里：判别值是**怎么跟上游说话**的
- * 细节，而 state 是**博弈本身**的快照 —— 把传输层的东西塞进 state，会让
- * 「同一局棋换个后端」变成两个不同的 state。
- */
-export type Channel =
-  | { kind: "noul-all"; backend?: string }
-  | { kind: "choice-all" }
-  | { kind: "choice-filtered"; filter: FilterId };
+   一条通道 = 一个请求：下面两条 `build*` 都返回**完整的** `Questions` record，
+   调用方一次性发出去、绝不循环。 */
 
 /**
  * 一道布尔题的题面。
