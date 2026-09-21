@@ -433,22 +433,38 @@ function fitBoard(): void {
  * 而侧栏本身是 `max-content` 撑出来的 —— 让图去挤压侧栏宽度会反过来让
  * 记分板折行（2048 那条教训）。
  */
-const CONF_H = 92;
-const MOM_H = 96;
+/**
+ * 生死态势图的**总**高度：48 = 原来 96 的一半（用户实测后定，见 ui-spec 第四节）。
+ * 理由是侧栏纵向空间稀缺，腾出来的留给要读的文本。「一半」指的是这个**盒子**的
+ * 高度，绘图区比这个数小 —— 上下内边距另算（`chart.ts` 的 `MOM_PAD_Y`）。
+ */
+const MOM_H = 48;
+
+/**
+ * 置信度图的兜底高度。
+ *
+ * 正常路径下它**不生效**：那一格与热力图并排，两者取同样高（见 `fitCharts`）。
+ * 留一个数是给「布局还没量出来（clientWidth 为 0）」的头几帧用的。
+ */
+const CONF_H = 132;
+
+/** 热力图边长上限。16×16 时它是 16 格的网格，边长太小会糊成一片 */
 const HEAT_MAX = 132;
 
 function fitCharts(): void {
-  const confBox = $("chartBox");
-  chart.resize(Math.max(0, confBox.clientWidth - 16), CONF_H);
-
   const momBox = $("momentumBox");
   momentum.resize(Math.max(0, momBox.clientWidth - 16), MOM_H);
 
   // ③ 与棋盘同形：正方形，边长取「容器宽」与「高度上限」的较小者。
-  // 16×16 时它是 16 格的网格，边长太小会糊成一片；太大又挤掉上面两张图
+  // 它与 ① 并排，所以容器宽只是侧栏的一半 —— 「削宽度」换来的高度给了文本
   const heatBox = $("heatBox");
   const side = Math.min(Math.max(0, heatBox.clientWidth - 2), HEAT_MAX);
   heat.resize(side, side);
+
+  // ★ ① 与 ③ **等高**：它们并排在同一行里，高度不一致会读成「没对齐」；
+  // 而 ① 挪到这里来本来就是为了换高度，不是换宽度
+  const confBox = $("chartBox");
+  chart.resize(Math.max(0, confBox.clientWidth - 16), side > 0 ? side : CONF_H);
 }
 
 new ResizeObserver(() => {

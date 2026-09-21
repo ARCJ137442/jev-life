@@ -541,3 +541,87 @@ test("置信度图：两带都在且有两个点时，「等待」必须消失",
   ]);
   assert.ok(!ctx.texts.includes(t("chart.conf.waiting")), "有数据了还写着「等待对局数据」");
 });
+
+/* ═══════════ ★ 生死态势图的填色方向 ═══════════ */
+
+/**
+ * 规格里的「边界上边是绿色区域」与「纵轴下 0 上 1」在文字上是**对不上**的
+ * —— 线以上是 `1 − 占比`（死细胞份额）。这一条被读反过一次，所以口径
+ * 不靠文字约定，靠这两条断言钉住：**线以下填绿、线以上填红，占比越高绿越大**。
+ *
+ * 断言用的是填充路径的上下边界（`_canvas.ts` 的 `fills[].minY/maxY`）——
+ * 方位是纯逻辑，但画到画布上之后就只剩人眼能判。
+ */
+const GREEN = "rgba(74,222,128,.20)";
+const RED = "rgba(248,113,113,.20)";
+
+function areas(ctx: ReturnType<typeof fakeCanvas>["ctx"]): {
+  green: Array<{ minY: number; maxY: number }>;
+  red: Array<{ minY: number; maxY: number }>;
+} {
+  const pick = (color: string) =>
+    ctx.fills
+      .filter((f) => f.color === color && f.minY !== null && f.maxY !== null)
+      .map((f) => ({ minY: f.minY as number, maxY: f.maxY as number }));
+  return { green: pick(GREEN), red: pick(RED) };
+}
+
+test("★ 填色方向：折线以下绿（活细胞份额）、以上红（死细胞份额）", () => {
+  const { canvas, ctx } = fakeCanvas();
+  const c = new MomentumChart(canvas, PALETTE);
+  c.resize(240, 96);
+  // 占比全程 0.9 —— 高于中线，绿区应当占掉绝大部分高度
+  c.setData({ ratios: [0.9, 0.9, 0.9], rules: { lifeWinRatio: 0.6, deathWinRatio: 0.05 } });
+
+  const { green, red } = areas(ctx);
+  assert.equal(green.length, 1, "线以下应当恰好是一块连通区域");
+  assert.equal(red.length, 1, "线以上应当恰好是一块连通区域");
+
+  // 屏幕坐标下 y 越大越靠下：绿块整体在红块**下方**，且两者恰好相接
+  assert.ok(green[0].minY > red[0].minY, "绿块没有落在红块下方 —— 填色方向反了");
+  assert.ok(green[0].maxY > red[0].maxY, "绿块的下边界应当在红块下边界之下");
+  assert.equal(green[0].minY, red[0].maxY, "两块应当在折线处严丝合缝地相接");
+
+  // 「占比越高、绿越大」—— 这一条就是用户要的直觉
+  const greenH = green[0].maxY - green[0].minY;
+  const redH = red[0].maxY - red[0].minY;
+  assert.ok(greenH > redH * 4, `占比 0.9 时绿区应当远大于红区：绿 ${greenH} / 红 ${redH}`);
+});
+
+test("★ 填色方向：占比低时绿区变小、红区变大（推拉的方向不能反）", () => {
+  const { canvas, ctx } = fakeCanvas();
+  const c = new MomentumChart(canvas, PALETTE);
+  c.resize(240, 96);
+  c.setData({ ratios: [0.1, 0.1, 0.1], rules: { lifeWinRatio: 0.6, deathWinRatio: 0.05 } });
+
+  const { green, red } = areas(ctx);
+  const greenH = green[0].maxY - green[0].minY;
+  const redH = red[0].maxY - red[0].minY;
+  assert.ok(redH > greenH * 4, `占比 0.1 时红区应当远大于绿区：绿 ${greenH} / 红 ${redH}`);
+});
+
+test("★ 填色不分段：折线反复穿过中线时，每一侧仍然只有一块", () => {
+  // 「分段」是**旧**画法（折线与 0.5 中线之间，按侧着色）的产物：曲线来回穿插
+  // 就会切出好几块。新画法以折线为国界线，两侧各是一块连通区域 ——
+  // 这条断言就是为了防止有人把 splitArea 那条路又接回来
+  const { canvas, ctx } = fakeCanvas();
+  const c = new MomentumChart(canvas, PALETTE);
+  c.resize(240, 96);
+  c.setData({ ratios: [0, 1, 0, 1, 0], rules: { lifeWinRatio: 0.6, deathWinRatio: 0.05 } });
+
+  const { green, red } = areas(ctx);
+  assert.equal(green.length, 1, `反复穿越中线后绿区被切成了 ${green.length} 块`);
+  assert.equal(red.length, 1, `反复穿越中线后红区被切成了 ${red.length} 块`);
+});
+
+test("生死态势图的内边距：上下与左右相同（省高度，侧栏空间稀缺）", () => {
+  const { canvas, ctx } = fakeCanvas();
+  const c = new MomentumChart(canvas, PALETTE);
+  c.resize(240, 96);
+  // 全 1 时绿块铺满绘图区：它的上边界就是绘图区顶（= 上下内边距），
+  // 下边界就是绘图区底。左右内边距靠 X 判断，这里只看纵向 → 顶必须 > 0 且很小
+  c.setData({ ratios: [1, 1], rules: { lifeWinRatio: 0.6, deathWinRatio: 0.05 } });
+  const { green } = areas(ctx);
+  assert.equal(green[0].minY, 4, "纵向内边距应当与横向一致（4），而不是原来的 10");
+  assert.equal(green[0].maxY, 96 - 4, "底边同样应当是 4");
+});

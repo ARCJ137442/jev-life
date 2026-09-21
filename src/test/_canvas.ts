@@ -16,14 +16,29 @@ export interface FakeCtx {
   arcCalls: Array<{ x: number; y: number; r: number; color: string; frame: number }>;
   /** 每次 stroke() 时的 strokeStyle。**空格井也会描边**，所以按颜色判而不是数次数 */
   strokes: string[];
-  /** 每次 fill() 时的填充色与不透明度 */
-  fills: Array<{ color: string; alpha: number; frame: number }>;
+  /**
+   * 每次 fill() 时的填充色与不透明度，**外加当前路径的上下边界**。
+   *
+   * 边界是后加的，为了能断言「哪块颜色在上、哪块在下」这类**方位**性质 ——
+   * 方位是纯逻辑（`yOf(0)` 在哪边），但画到画布上之后就只剩人眼能判。
+   * 生死态势图的填色方向被规格读反过一次，正需要这一条兜住。
+   * 路径里没有点时（比如只画了一个 `arc`）两个边界都是 `null`。
+   */
+  fills: Array<{
+    color: string;
+    alpha: number;
+    frame: number;
+    minY: number | null;
+    maxY: number | null;
+  }>;
   /** 每次 fillText() 写下的文本（「等待对局数据」、越界轮数、阈值标签…） */
   texts: string[];
   [k: string]: unknown;
 }
 
 export function fakeCanvas(): { canvas: HTMLCanvasElement; ctx: FakeCtx } {
+  /** 当前路径累积的顶点（`beginPath` 清空）。只用于给 fill() 记上下边界 */
+  const path: Array<{ x: number; y: number }> = [];
   const ctx: FakeCtx = {
     frame: 0,
     arcCalls: [],
@@ -44,12 +59,20 @@ export function fakeCanvas(): { canvas: HTMLCanvasElement; ctx: FakeCtx } {
       ctx.frame++;
     },
     fillRect: () => {},
-    beginPath: () => {},
+    beginPath: () => {
+      path.length = 0;
+    },
     closePath: () => {},
-    moveTo: () => {},
-    lineTo: () => {},
+    moveTo: (x: number, y: number) => {
+      path.push({ x, y });
+    },
+    lineTo: (x: number, y: number) => {
+      path.push({ x, y });
+    },
     arcTo: () => {},
     arc: (x: number, y: number, r: number) => {
+      // `arc` 也是路径的一部分，但它记的是圆心 —— 只进 arcCalls，
+      // 不进 path：把圆心当成顶点会得到一条凭空偏移的边界
       ctx.arcCalls.push({ x, y, r, color: String(ctx.fillStyle), frame: ctx.frame });
     },
     fill: () => {
@@ -57,6 +80,8 @@ export function fakeCanvas(): { canvas: HTMLCanvasElement; ctx: FakeCtx } {
         color: String(ctx.fillStyle),
         alpha: Number(ctx.globalAlpha),
         frame: ctx.frame,
+        minY: path.length ? Math.min(...path.map((p) => p.y)) : null,
+        maxY: path.length ? Math.max(...path.map((p) => p.y)) : null,
       });
     },
     stroke: () => {

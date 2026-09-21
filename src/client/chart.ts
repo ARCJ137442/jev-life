@@ -483,6 +483,29 @@ export function splitArea(ratios: readonly number[], mid: number): AreaRun[] {
 
 const MOM_THRESHOLD_DASH: number[] = [3, 3];
 
+/**
+ * 生死态势图的内边距：**上下与左右相同**（用户实测后定，见 ui-spec 第四节）。
+ *
+ * 单独一组常量而不是复用 `PAD_T`/`PAD_B`：那两个值（10 / 12）是给置信度
+ * 面积图留「1.0 / 0.0」轴标签用的，而生死态势图不画轴标签 —— 它需要在
+ * 纵向**省出空间**，而侧栏的高度正是稀缺资源。
+ */
+const MOM_PAD_X = 4;
+const MOM_PAD_Y = 4;
+
+/**
+ * 折线以下（活细胞份额）与以上（死细胞份额）的填充色。
+ *
+ * ⚠ **方向容易读反，这里记一笔**：纵轴是下 0 上 1，所以「折线以上」是
+ * `1 − 占比`，也就是**死细胞**的份额。用户的原话是「边界上边是绿色区域」，
+ * 而图形语义要求的是「线以下填绿」—— 两者在文字上对不上，最后是
+ * 做出预览图让他挑才定下来的。规格里也订正过一次。
+ *
+ * 定下来的口径：**占比越高、绿越大** —— 绿看着变大就是生之执在赢。
+ */
+const MOM_FILL_LIFE = "rgba(74,222,128,.20)";
+const MOM_FILL_DEATH = "rgba(248,113,113,.20)";
+
 export class MomentumChart {
   private w = 0;
   private h = 0;
@@ -526,12 +549,12 @@ export class MomentumChart {
     const { w, h } = this;
     ctx.clearRect(0, 0, w, h);
 
-    const plotW = w - PAD_L - PAD_R;
-    const plotH = h - PAD_T - PAD_B;
+    const plotW = w - MOM_PAD_X * 2;
+    const plotH = h - MOM_PAD_Y * 2;
     if (plotW <= 4 || plotH <= 4) return;
 
     // 纵轴 0 在下、1 在上
-    const yOf = (v: number): number => PAD_T + (1 - Math.max(0, Math.min(1, v))) * plotH;
+    const yOf = (v: number): number => MOM_PAD_Y + (1 - Math.max(0, Math.min(1, v))) * plotH;
 
     const d = this.data;
     const n = d ? d.ratios.length : 0;
@@ -545,26 +568,44 @@ export class MomentumChart {
     }
 
     const rules = d.rules;
+    const xOf = (i: number): number => (n === 1 ? MOM_PAD_X : MOM_PAD_X + (i / (n - 1)) * plotW);
+
+    /* ── ★ 折线**就是国界线** ──
+       线以下填绿（活细胞份额）、线以上填红（死细胞份额），**各填到画布边缘**。
+
+       早先填的是「折线与 0.5 中线之间」，颜色按曲线在中线的哪一侧定。那个画法
+       只在曲线穿过中线时才变色，**推拉的动感全丢了**（用户实测后指出）。现在
+       两个区域此消彼长：地盘大了绿区就厚、小了就薄，一眼看出谁在推谁在退。
+       0.5 中线仍然画，但它降级成**背景参照**，不再决定填色。
+
+       两段面积各自**连续**，不需要像 `splitArea` 那样在穿越点断开：折线是
+       单值函数，线以上与线以下各是一块连通区域，不存在「一段同时跨两侧」。
+       （`splitArea` 仍然保留 —— 它服务的是「折线与某条水平线之间的差量」这个
+        另一种语义，两者不可互换。）
+
+       ⚠ 填色方向按 `MOM_FILL_LIFE` 那段注释的口径，**别照文字方位猜**。
+
+       画在三条水平线**之前**：线要被压在上面才看得清 —— 否则中线与两条界限
+       虚线会被整片色块糊掉，而那三条线是判读「离赢多远」的全部依据。 */
+    if (n >= 2) {
+      const area = (toY: number, color: string): void => {
+        ctx.beginPath();
+        ctx.moveTo(xOf(0), yOf(d.ratios[0]));
+        for (let i = 1; i < n; i++) ctx.lineTo(xOf(i), yOf(d.ratios[i]));
+        ctx.lineTo(xOf(n - 1), toY);
+        ctx.lineTo(xOf(0), toY);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+      };
+      area(yOf(0), MOM_FILL_LIFE);  // 线下：活细胞份额（占比越高，绿越大）
+      area(yOf(1), MOM_FILL_DEATH); // 线上：死细胞份额
+    }
 
     // 三条水平元素：两条胜负界限 + 一条 0.5 中线
     this.thresholdLine(ctx, w, yOf(rules.lifeWinRatio), this.palette.life, rules.lifeWinRatio);
     this.thresholdLine(ctx, w, yOf(0.5), "rgba(255,255,255,.24)", 0.5);
     this.thresholdLine(ctx, w, yOf(rules.deathWinRatio), this.palette.death, rules.deathWinRatio);
-
-    const xOf = (i: number): number => (n === 1 ? PAD_L : PAD_L + (i / (n - 1)) * plotW);
-
-    // 优势面积：0.5 以上填绿、以下填红
-    for (const run of splitArea(d.ratios, 0.5)) {
-      ctx.beginPath();
-      ctx.moveTo(xOf(run.pts[0].i), yOf(run.pts[0].v));
-      for (const p of run.pts) ctx.lineTo(xOf(p.i), yOf(p.v));
-      const last = run.pts[run.pts.length - 1];
-      ctx.lineTo(xOf(last.i), yOf(0.5));
-      ctx.lineTo(xOf(run.pts[0].i), yOf(0.5));
-      ctx.closePath();
-      ctx.fillStyle = run.above ? "rgba(74,222,128,.20)" : "rgba(248,113,113,.20)";
-      ctx.fill();
-    }
 
     // 实际值折线：描边随高度渐变（低红 → 中黄 → 高绿）
     if (n >= 2) {
@@ -620,8 +661,8 @@ export class MomentumChart {
     ctx.lineWidth = 1;
     ctx.setLineDash(MOM_THRESHOLD_DASH);
     ctx.beginPath();
-    ctx.moveTo(PAD_L, Math.round(y) + 0.5);
-    ctx.lineTo(w - PAD_R, Math.round(y) + 0.5);
+    ctx.moveTo(MOM_PAD_X, Math.round(y) + 0.5);
+    ctx.lineTo(w - MOM_PAD_X, Math.round(y) + 0.5);
     ctx.stroke();
     ctx.restore();
 
@@ -630,7 +671,7 @@ export class MomentumChart {
     ctx.font = "8px ui-monospace, Menlo, monospace";
     ctx.textAlign = "left";
     ctx.textBaseline = "bottom";
-    ctx.fillText(value.toFixed(2), PAD_L + 2, y - 1);
+    ctx.fillText(value.toFixed(2), MOM_PAD_X + 2, y - 1);
     ctx.globalAlpha = 1;
   }
 }
