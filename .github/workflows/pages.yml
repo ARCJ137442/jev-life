@@ -1,0 +1,111 @@
+name: Deploy to GitHub Pages
+
+# 把纯静态的界面发布到 GitHub Pages。
+#
+# ⚠ GitHub Pages 只有静态文件，没有 Serverless Function ——
+#   所以「免费试用」与「LLM 免费试用」这些后端在这里是**跨域调用 Vercel 上那份部署**。
+#   密钥仍然只在 Vercel 的函数进程里，静态页面拿不到任何凭据。
+#   远端地址由 src/client/api.ts 的 REMOTE_PROXY_BASE 决定。
+#
+# ⚠ REMOTE_PROXY_BASE 必须与实际的 Vercel 域名一致，否则静态版跨域调不通，
+#   而且失败是静默的（页面能开，只是所有请求 404）。
+#
+# 需要在仓库 Settings → Pages 里把 Source 设为 "GitHub Actions"。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - name: 检查 DOM id 一致性
+        run: node tools/check-dom.ts
+
+      - name: 检查分层（core/ 不得 import client/）
+        run: node tools/scan.ts
+
+      - name: 单元测试
+        run: |
+          node node_modules/typescript/bin/tsc -p tsconfig.test.json
+          node --test dist-test/test/*.test.js
+
+      - name: 注入远端代理地址
+        # ★ 仓库里的 REMOTE_PROXY_BASE 默认是**空字符串** —— 刻意不给默认值。
+        #   写死一个默认域名，等于让别人的 fork 静默消耗原作者的免费额度，
+        #   而靠注释提醒「请改成你的」只是君子协议。
+        #
+        #   所以本仓库自己的部署在这里把它注入进去：仓库变量
+        #   JEV_LIFE_REMOTE_BASE = 你的 Vercel 域名。
+        #   **没配这个变量时，静态版就没有远端后端可用** —— 那几条「免费试用」
+        #   会在界面上隐藏，而不是发一堆注定 404 的请求。
+        env:
+          BASE: ${{ vars.JEV_LIFE_REMOTE_BASE }}
+        run: |
+          if [ -z "$BASE" ]; then
+            echo "::warning::未配置仓库变量 JEV_LIFE_REMOTE_BASE —— 静态版将没有远端后端可用"
+          else
+            node -e '
+              const fs = require("fs");
+              const p = "src/client/deploy.ts";
+              const src = fs.readFileSync(p, "utf8");
+              const out = src.replace(
+                /^export const REMOTE_PROXY_BASE = .*;$/m,
+                `export const REMOTE_PROXY_BASE = ${JSON.stringify(process.env.BASE)};`,
+              );
+              if (out === src) { console.error("注入失败：没匹配到那一行"); process.exit(1); }
+              fs.writeFileSync(p, out);
+            '
+            echo "已注入远端代理地址"
+          fi
+
+      - name: 编译客户端
+        # 只编译客户端 —— Pages 上没有服务端，dist/ 用不到
+        run: node node_modules/typescript/bin/tsc -p tsconfig.client.json
+
+      - name: 扫描静态产物里的密钥
+        # 同样不用 grep -I（会跳过二进制）。
+        # 放在编译之后，才能扫到刚刚生成的 public/js/。
+        run: node tools/scan-secrets.ts
+
+      - name: 准备 Pages 产物
+        run: |
+          # GitHub Pages 默认用 Jekyll 处理，会忽略下划线开头的文件。
+          # 我们不依赖 Jekyll，关掉它。
+          touch public/.nojekyll
+          # 没有服务端，给个 404 页面比浏览器默认的强
+          cp public/index.html public/404.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

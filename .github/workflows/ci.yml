@@ -1,0 +1,63 @@
+name: CI
+
+# 这里的检查与本地 ./start.sh **跑的是同一组** —— 本地能过，CI 就能过，反之亦然。
+# 不一致的 CI 会逼人「本地先跑一遍再推」，那 CI 就失去意义了。
+#
+# ⚠ 顺序与 start.sh 不完全相同（start.sh 把密钥扫描放最前，这里放最后并加 --history），
+#   但**覆盖的检查项是同一组**。改动一边时记得看另一边。
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  # 供 deploy.yml 复用，避免两处各写一遍检查步骤而慢慢走样
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 检查 DOM id 一致性
+        # HTML 与 TS 不同步会导致启动期异常，静默中断整个应用
+        run: node tools/check-dom.ts
+
+      - name: 检查分层（core/ 不得 import client/）
+        # core/ 要在无 DOM、无网络的 Node 里跑（跑分工具依赖这一点）。
+        # 这条纪律在源仓库只以注释形式存在，没人守；这里做成构建期硬检查。
+        run: node tools/scan.ts
+
+      - name: 类型检查
+        run: |
+          node node_modules/typescript/bin/tsc -p tsconfig.client.json --noEmit
+          node node_modules/typescript/bin/tsc -p tsconfig.server.json --noEmit
+          node node_modules/typescript/bin/tsc -p tsconfig.api.json
+          node node_modules/typescript/bin/tsc -p tsconfig.tools.json
+
+      - name: 单元测试
+        run: |
+          node node_modules/typescript/bin/tsc -p tsconfig.test.json
+          node --test dist-test/test/*.test.js
+
+      - name: 构建
+        run: |
+          node node_modules/typescript/bin/tsc -p tsconfig.client.json
+          node node_modules/typescript/bin/tsc -p tsconfig.server.json
+
+      - name: 扫描工作区与 git 历史里的密钥
+        # ⚠ 不能用 grep -I —— 那个 -I 会跳过二进制文件。
+        # 真实案例：某个文件混进裸控制字节后被判为二进制，
+        # 里面的真实密钥恰好从扫描里溜了过去。tools/scan-secrets.ts 按字节读，
+        # 不做任何文本/二进制假设，并同时检查 git 历史。
+        run: node tools/scan-secrets.ts --history
