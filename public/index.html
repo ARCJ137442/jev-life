@@ -1,29 +1,898 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
 <title>生命棋 × Jev</title>
+<style>
+/* ══════════════════════════════════════════════════════════════════
+   配色：**冷底 + 青强调**
+
+   生命棋的四个色相已经被「内容」占用 ——
+     绿 = 生之执 · 红 = 死之执 · 黄 = 中段/交集 · 白 = 活细胞
+   所以界面主题色只能落在青/蓝/紫一带，选了青（#22d3ee）。
+
+   ★ 底色**必须一起去暖**。2048 那套的 #121110 / #1a1816 不是中性灰，
+   是带棕调的暖灰（为呼应它的橙）。只把 accent 换成青而留着暖底，会出现
+   「冷色强调 + 暖色底」的脏感。所以这里的 --bg / --panel / --panel-2 是
+   一组**同色相的冷灰**（都带一点点蓝），而不是各自挑的三个好看颜色。
+   ══════════════════════════════════════════════════════════════════ */
+:root{
+  --bg:#07090c;                                   /* 近黑，微冷，去掉棕调 */
+  --panel:#0f1217;                                /* 冷灰一阶 */
+  --panel-2:#171c23;                              /* 冷灰二阶（同色相） */
+  --hover:#1d232b;
+  --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.14);
+  --ink:#fff; --ink-2:rgba(255,255,255,.6); --ink-3:rgba(255,255,255,.38); --ink-4:rgba(255,255,255,.2);
+  --accent:#22d3ee; --accent-2:#67e8f9; --accent-soft:rgba(34,211,238,.14);
+  --accent-ink:#04252b;                           /* 青底上的深色文字 */
+  /* 角色色与内容色 —— 它们**不随主题走**，是数据的一部分 */
+  --green:#4ade80; --red:#f87171; --yellow:#fbbf24; --live:#fff;
+  /* 字体：**刻意不引 webfont**（源仓库从 Google Fonts 取 Geist）。
+     理由有三，按重要性排：① 少一个外部依赖，断网/内网也长得一样；
+     ② 不向第三方发请求；③ 字体晚到会让首屏布局跳一下，而这个页面的
+     尺寸是 JS 按容器量出来的（fitCharts），跳一次就多算一次。
+     字体栈里仍留着 Geist —— 本机装了就自然用上，没装就落到系统字体 */
+  --mono:ui-monospace,SFMono-Regular,Menlo,"Geist Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --r:8px; --gut:clamp(12px,2.2vw,22px);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{display:flex;flex-direction:column;background:var(--bg);color:var(--ink);
+  font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;overscroll-behavior:none}
+
+/* ══ 顶栏 ══ */
+header{display:flex;align-items:center;gap:8px;padding:calc(var(--gut)*.55) var(--gut);
+  border-bottom:1px solid var(--line);flex-shrink:0}
+h1{font-size:clamp(15px,2.3vw,18px);font-weight:600;letter-spacing:-.02em;white-space:nowrap}
+h1 .x{color:var(--accent);font-weight:400;margin:0 3px}
+.sub{font-size:11.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+header .spacer{flex:1}
+.hbtn{display:inline-flex;align-items:center;gap:6px;font:500 12.5px var(--sans);color:var(--ink-2);
+  cursor:pointer;background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r);
+  padding:6px 11px;transition:.14s;white-space:nowrap;text-decoration:none}
+.hbtn:hover{background:var(--hover);color:var(--ink);border-color:var(--line-2)}
+.hbtn svg{width:14px;height:14px;flex-shrink:0}
+a.gh{padding:6px 9px}
+a.gh svg{width:17px;height:17px}
+a.gh:hover{color:var(--accent);border-color:var(--accent)}
+@media(max-width:900px){ .hbtn .lbl{display:none} }
+@media(max-width:560px){ .sub{display:none} }
+
+button{font:500 12.5px var(--sans);color:var(--ink-2);cursor:pointer;background:var(--panel-2);
+  border:1px solid var(--line);border-radius:var(--r);padding:7px 13px;transition:.14s;white-space:nowrap}
+button:hover:not(:disabled){background:var(--hover);color:var(--ink);border-color:var(--line-2);transform:translateY(-1px)}
+button:active:not(:disabled){transform:translateY(0)}
+button:disabled{opacity:.3;cursor:not-allowed}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+button.primary:hover:not(:disabled){background:var(--accent-2);border-color:var(--accent-2)}
+button.ghost{background:transparent}
+button.running{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+button.running:hover:not(:disabled){background:rgba(34,211,238,.22);color:var(--accent-2)}
+button.mini{padding:5px 10px;font-size:11.5px}
+button.danger{border-color:rgba(248,113,113,.45);color:var(--red)}
+button.danger:hover:not(:disabled){background:rgba(248,113,113,.12);border-color:var(--red);color:var(--red)}
+
+/* ══ 主区 ══ */
+main{flex:1;min-height:0;display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(min-content,max-content);
+  gap:var(--gut);padding:var(--gut)}
+.stage{display:flex;flex-direction:column;min-height:0;min-width:0}
+.board-box{flex:1;min-height:0;position:relative;display:flex;align-items:center;justify-content:center}
+/* 棋盘底色是**占位**：T15 的渲染器会盖满它。留一个浅一阶的冷灰底，
+   是为了让「棋盘在那儿、只是还没画」与「页面坏了」在视觉上分得开 */
+canvas#board{display:block;border-radius:12px;background:#0b0f14;box-shadow:inset 0 0 0 1px var(--line)}
+.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding-top:calc(var(--gut)*.55);flex-shrink:0}
+.hint{font:11px var(--mono);color:var(--ink-3);margin-left:auto;white-space:nowrap}
+kbd{font:600 10.5px var(--mono);background:var(--panel-2);border:1px solid var(--line);
+  border-bottom-width:2px;border-radius:4px;padding:1px 5px;color:var(--ink-2)}
+.pace{display:flex;align-items:center;gap:10px;margin-top:9px;flex-shrink:0}
+.pace .lbl{font:11px var(--mono);color:var(--ink-3);white-space:nowrap}
+.pace .val{font:600 12px var(--mono);color:var(--accent);min-width:42px;text-align:right}
+input[type=range]{-webkit-appearance:none;appearance:none;flex:1;height:20px;background:transparent;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:3px;border-radius:2px;background:rgba(255,255,255,.12)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+  margin-top:-5px;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+input[type=range]::-moz-range-track{height:3px;border-radius:2px;background:rgba(255,255,255,.12)}
+input[type=range]::-moz-range-thumb{width:13px;height:13px;border:none;border-radius:50%;
+  background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+
+/* ══ 侧栏 ══ */
+/* min-height:0 + overflow-y:auto：三张图纵向堆叠，窄屏上一定放不下。
+   与其让它们互相挤压，不如让整栏滚动（规格里记的就是「先按上下堆叠做」） */
+.side{display:flex;flex-direction:column;gap:9px;min-height:0;overflow-y:auto;overflow-x:hidden;
+  width:max-content;min-width:252px;max-width:min(40vw,400px)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  overflow:hidden;flex:0 0 auto}
+
+/* 记分板：整行的 max-content 恰好等于「全部标签不换行」所需宽度，
+   于是外层的 max-content 轨道会自动把侧栏撑到刚好够用 */
+.stats{display:flex;gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
+.stat{background:var(--panel);padding:6px 8px;flex:1 1 auto;white-space:nowrap}
+.stat .k{font:9.5px var(--mono);color:var(--ink-3);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap}
+.stat .v{font:600 15.5px var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em;margin-top:1px;white-space:nowrap}
+.stat .v.hi{color:var(--accent)}
+
+.dec{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  padding:11px;flex:1 1 auto;min-height:150px;overflow:auto}
+.dec-head{display:flex;align-items:center;gap:8px;margin-bottom:9px;font:10px var(--mono);
+  letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
+.dec-head .dot{width:5px;height:5px;border-radius:50%;background:var(--accent);flex-shrink:0}
+.dec-head .turn{margin-left:auto;letter-spacing:0;text-transform:none;color:var(--ink-4)}
+/* ③ 决策热力图：与棋盘同形的独立小图，**不叠在真棋盘上**。
+   这里只给它一个居中的方框，绘制归 T15 */
+.heatbox{display:flex;justify-content:center;margin-bottom:9px}
+.heatbox canvas{display:block;border-radius:4px;background:#0b0f14;box-shadow:inset 0 0 0 1px var(--line)}
+
+.prows{display:flex;flex-direction:column;gap:9px}
+.prow{border-left:2px solid var(--rc);padding-left:8px}
+.phead{display:flex;align-items:baseline;gap:7px;font:11px var(--mono);flex-wrap:wrap}
+.pwho{color:var(--rc);font-weight:700}
+.pcell{color:var(--ink)}
+.pp{color:var(--ink-3)}
+.flag{font:9px var(--mono);color:var(--accent);border:1px solid rgba(34,211,238,.35);
+  border-radius:99px;padding:0 5px}
+.pnote{font:10.5px/1.5 var(--mono);color:var(--ink-3);margin-top:3px}
+.ptop{font:10px/1.5 var(--mono);color:var(--ink-4);margin-top:2px;word-break:break-all}
+.idle{font-size:12px;color:var(--ink-4);text-align:center;padding:16px 0}
+
+.chartbox{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  padding:8px;flex:0 0 auto;overflow:hidden}
+.chartbox .cap{display:flex;align-items:center;gap:6px;margin-bottom:3px;font:9.5px var(--mono);
+  letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);flex-wrap:wrap}
+.chartbox .cap .lgd{margin-left:auto;display:flex;gap:8px;letter-spacing:0;text-transform:none;font-size:9px}
+.chartbox .cap .lgd i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:3px;vertical-align:-1px}
+.chartbox canvas{display:block;width:100%}
+
+/* ══ 状态条 ══ */
+footer{display:flex;align-items:center;gap:12px;flex-wrap:wrap;flex-shrink:0;
+  padding:7px var(--gut);border-top:1px solid var(--line);font:11px var(--mono);color:var(--ink-3)}
+.led{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink-4);
+  margin-right:6px;vertical-align:1px;transition:.2s}
+.led.on{background:var(--accent);box-shadow:0 0 7px var(--accent)}
+.led.busy{background:var(--accent-2);animation:bl .6s infinite}
+.led.err{background:var(--red);box-shadow:0 0 7px var(--red)}
+@keyframes bl{50%{opacity:.2}}
+footer b{color:var(--ink-2);font-weight:600}
+footer .spacer{flex:1}
+
+/* ══ 抽屉 ══ */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);
+  opacity:0;pointer-events:none;transition:opacity .2s;z-index:100}
+.scrim.show{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(460px,94vw);background:var(--panel);
+  border-left:1px solid var(--line);transform:translateX(100%);
+  transition:transform .24s cubic-bezier(.3,.9,.35,1);z-index:101;display:flex;flex-direction:column}
+.drawer.show{transform:none}
+.drawer.wide{width:min(660px,96vw)}
+/* 窄屏下抽屉占满全宽、把遮罩层整个盖住，点画面空白处退不出来，
+   只能翻到底部找「完成」。补一个显式的关闭按钮 */
+.drawer-close{position:absolute;top:12px;right:14px;z-index:2;
+  width:34px;height:34px;padding:0;border-radius:var(--r);
+  display:none;align-items:center;justify-content:center;
+  font:400 15px/1 var(--sans);color:var(--ink-3);background:var(--panel-2)}
+.drawer-close:hover:not(:disabled){background:var(--hover);color:var(--ink);transform:none}
+.drawer > header{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:10px}
+.drawer > header svg{width:17px;height:17px;color:var(--accent);flex-shrink:0;margin-top:2px}
+.drawer > header h2{font-size:14px;font-weight:600}
+.drawer > header p{font-size:11.5px;color:var(--ink-4);margin-top:3px;line-height:1.5}
+.drawer .body{padding:16px 18px;overflow:auto;flex:1}
+.drawer > footer{border-top:1px solid var(--line);padding:12px 18px;display:flex;gap:8px;flex-wrap:wrap}
+.drawer > footer button{flex:0 0 auto}
+
+.field{margin-bottom:15px}
+/* ★ :not(.switch) —— 否则 display:block 会覆盖 .switch 的 flex，轨道塌陷 */
+.field > label:not(.switch){display:block;font:10.5px var(--mono);color:var(--ink-3);
+  letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px}
+.field .desc{font-size:11.5px;color:var(--ink-4);margin-bottom:6px;line-height:1.55}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.slider-row{display:flex;align-items:center;gap:10px}
+.slider-row .val{font:600 12px var(--mono);color:var(--accent);min-width:46px;text-align:right}
+.presets{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.presets button{flex:1;min-width:56px}
+.presets button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+textarea,.field input,.field select{width:100%;background:#0a0d11;border:1px solid var(--line);
+  border-radius:6px;color:var(--ink-2);font:12px/1.6 var(--mono);padding:9px 10px;transition:.14s}
+textarea:focus,.field input:focus,.field select:focus{outline:none;border-color:var(--accent);
+  color:var(--ink);box-shadow:0 0 0 3px var(--accent-soft)}
+textarea{resize:vertical}
+.field input:disabled{color:var(--ink-4);cursor:not-allowed;user-select:none}
+.field input.numin{width:110px}
+.warnline{display:none;font:10.5px var(--mono);color:var(--red);margin-top:6px}
+.tinylbl{font:10px var(--mono);color:var(--ink-4);margin-top:5px}
+
+/* 抽屉内的分区标题 */
+.section-head{margin-bottom:12px}
+.section-head .sec-title{
+  display:inline-block;font:600 11px var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent);padding:3px 9px;border:1px solid rgba(34,211,238,.35);
+  border-radius:99px;background:rgba(34,211,238,.07);
+}
+.section-head .sec-note{display:block;font-size:11px;color:var(--ink-4);margin-top:7px;line-height:1.55}
+.divider{height:1px;margin:22px 0 20px;background:linear-gradient(90deg,transparent,var(--line-2) 15%,var(--line-2) 85%,transparent);position:relative}
+.divider::after{content:"↓";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  background:var(--panel);padding:0 7px;color:var(--ink-4);font-size:10px}
+
+/* 玩家切换（生之执 / 死之执）—— 后端与上下文都是玩家级的 */
+.roletabs{display:flex;gap:6px;margin-bottom:12px}
+.roletab{flex:1}
+.roletab.on[data-role=life]{background:rgba(74,222,128,.16);border-color:var(--green);color:var(--green);font-weight:600}
+.roletab.on[data-role=death]{background:rgba(248,113,113,.16);border-color:var(--red);color:var(--red);font-weight:600}
+.syncrow{margin:18px 0 4px}
+.syncrow button{width:100%;white-space:normal;text-align:center;line-height:1.45;padding:9px 12px}
+
+/* 开关：显式 flex + 轨道 display:block（双保险） */
+.switch{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+.switch input{display:none}
+.switch .track{display:block;width:36px;height:20px;border-radius:99px;
+  background:rgba(255,255,255,.1);position:relative;transition:.18s;flex:0 0 36px}
+.switch .track::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;
+  border-radius:50%;background:var(--ink-3);transition:.18s}
+.switch input:checked + .track{background:rgba(34,211,238,.32)}
+.switch input:checked + .track::after{transform:translateX(16px);background:var(--accent)}
+.switch .txt{font-size:12.5px;color:var(--ink-2);flex:1;min-width:0}
+
+.warn{background:rgba(34,211,238,.06);border:1px solid rgba(34,211,238,.22);border-radius:6px;
+  padding:11px;font-size:11.5px;line-height:1.65;color:var(--ink-2);margin-bottom:15px}
+.warn b{color:var(--accent)}
+.note{font-size:11.5px;color:var(--ink-4);line-height:1.6;margin-bottom:14px;
+  padding-left:10px;border-left:1.5px solid var(--line-2)}
+
+/* 开局选择器：monospace 字符网格画出形状，不只是文字名称 */
+.openings{display:flex;flex-direction:column;gap:8px}
+.opening{display:flex;gap:11px;align-items:flex-start;text-align:left;white-space:normal;
+  padding:10px;width:100%;line-height:1.4}
+.opening.on{border-color:var(--accent);background:rgba(34,211,238,.07)}
+.opening .thumb{font:10px/1.05 var(--mono);color:var(--ink-2);flex:0 0 auto;letter-spacing:.5px;margin:0}
+.opening.on .thumb{color:var(--live)}
+.opening .obody{display:flex;flex-direction:column;gap:3px;min-width:0}
+.opening .oname{font-weight:600;font-size:12.5px;color:var(--ink)}
+.opening.on .oname{color:var(--accent)}
+.opening .onote{font-size:10.5px;line-height:1.5;color:var(--ink-4);white-space:normal}
+
+/* ══ 日志 ══ */
+.lg{border:1px solid var(--line);border-radius:6px;margin-bottom:7px;background:#0c1014}
+.lg > summary{display:flex;align-items:center;gap:9px;padding:8px 10px;cursor:pointer;
+  font:11px var(--mono);list-style:none;flex-wrap:wrap}
+.lg > summary::-webkit-details-marker{display:none}
+.lg[open] > summary{border-bottom:1px solid var(--line)}
+.lg.warn{border-color:rgba(34,211,238,.35)}
+.lg.err{border-color:rgba(248,113,113,.4)}
+.lgturn{color:var(--ink-4);min-width:28px}
+.lgmove{font-weight:700;font-size:12px}
+.lgmove.err{color:var(--red);font-size:11px}
+.lgr{color:var(--ink-2)}
+.lgdot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--rc);margin-right:5px;vertical-align:0}
+.lggrow{color:var(--ink-3);font-variant-numeric:tabular-nums}
+.lgmeta{margin-left:auto;color:var(--ink-4);font-size:10px;white-space:nowrap}
+.lgbody{padding:10px}
+.lgrole{border-left:2px solid var(--rc);padding-left:9px;margin-bottom:12px}
+.lgrow{display:flex;gap:8px;margin-bottom:8px;font-size:11px}
+.lgrow > span{color:var(--ink-4);flex:0 0 74px}
+.lgrow code{color:var(--ink-2);font-family:var(--mono);word-break:break-all}
+.lgbtns{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.lglabel{font:9.5px var(--mono);color:var(--ink-4);letter-spacing:.07em;text-transform:uppercase;margin:9px 0 4px}
+.lghint{font:10.5px var(--mono);color:var(--ink-4);text-align:center;padding:10px 0 4px}
+.lgbody pre{background:#070a0d;border:1px solid var(--line);border-radius:5px;padding:9px;
+  font:10.5px/1.55 var(--mono);color:var(--ink-2);overflow:auto;max-height:230px;white-space:pre-wrap;word-break:break-all}
+
+/* ══ 弹框 ══ */
+.modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.72);backdrop-filter:blur(5px);z-index:210;padding:18px}
+.modal.show{display:flex}
+.modal-box{background:var(--panel);border:1px solid var(--line-2);border-radius:12px;
+  padding:22px;width:100%;max-width:560px;max-height:90vh;overflow:auto}
+.modal-box h2{font-size:16px;font-weight:600;margin-bottom:15px}
+.rawbox{background:#070a0d;border:1px solid var(--line);border-radius:6px;padding:10px;
+  font:10.5px/1.5 var(--mono);color:var(--ink-3);max-height:170px;overflow:auto;
+  white-space:pre-wrap;word-break:break-all;margin:0}
+.notice-line{font-size:11.5px;color:var(--ink-4);line-height:1.6;margin:4px 0 18px;
+  padding-left:10px;border-left:1.5px solid var(--line-2)}
+.actions-wrap{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+
+/* ══ 顶部瞬时提示 ══ */
+.toast{position:fixed;left:50%;top:calc(var(--gut) + 46px);transform:translate(-50%,-14px);
+  background:var(--panel-2);border:1px solid var(--line-2);border-radius:8px;
+  padding:9px 15px;font:12px var(--mono);color:var(--ink);
+  box-shadow:0 10px 32px rgba(0,0,0,.6);z-index:300;
+  opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;max-width:88vw}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.err{border-color:rgba(248,113,113,.5);color:#f5b5b5}
+
+/* ══ 覆盖层（终局 / 出错）══ */
+.overlay{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;
+  justify-content:center;gap:12px;background:rgba(7,9,12,.9);backdrop-filter:blur(4px);
+  z-index:50;border-radius:12px;text-align:center;padding:22px}
+.overlay.show{display:flex}
+.overlay h2{font-size:17px;font-weight:600}
+.overlay p{font-size:12.5px;color:var(--ink-3);max-width:360px;line-height:1.65}
+.overlay p.err{font-family:var(--mono);font-size:10.5px;color:#e0a0a0;word-break:break-all;
+  max-height:120px;overflow:auto}
+
+/* ══════════ 平板 / 窄桌面 ══════════ */
+@media(max-width:900px){
+  .side{min-width:224px}
+  .stat{padding:5px 6px}
+  .stat .v{font-size:13.5px}
+  .stat .k{font-size:8.5px;letter-spacing:.02em}
+}
+
+/* ══════════ 移动端：棋盘在上，仪表在下 ══════════ */
+@media(max-width:760px){
+  :root{--gut:10px}
+  main{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto;gap:9px;padding:9px}
+  .side{flex-direction:row;width:100%;min-width:0;max-width:none;gap:8px;
+    overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;align-items:stretch}
+  .card{flex:0 0 auto}
+  .stats{flex-direction:column;background:transparent;border-bottom:none}
+  .stat{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:2px 9px}
+  .stat .v{margin-top:0}
+  .dec{flex:1 1 210px;min-width:210px;min-height:120px;padding:9px}
+  .chartbox{flex:0 0 190px;min-width:190px}
+  .hint{display:none}
+  button{padding:9px 14px;min-height:40px}
+  button.mini{min-height:32px;padding:5px 10px}
+  .hbtn{padding:8px 11px;min-height:40px}
+  .drawer,.drawer.wide{width:100%;max-width:100%;border-left:none}
+  .drawer-close{display:flex}
+  .drawer > header{padding-right:56px}
+  .drawer .body{padding:14px 15px}
+  .drawer > footer{padding:11px 15px}
+  .drawer > footer button{flex:1}
+  input[type=range]{height:28px}
+  input[type=range]::-webkit-slider-thumb{width:18px;height:18px;margin-top:-7.5px}
+  input[type=range]::-moz-range-thumb{width:18px;height:18px}
+  .switch .track{width:42px;height:24px;flex-basis:42px}
+  .switch .track::after{width:18px;height:18px}
+  .switch input:checked + .track::after{transform:translateX(18px)}
+  .presets button{min-height:40px}
+}
+
+/* ══════════ 横屏手机：高度紧张，压缩纵向留白 ══════════ */
+@media(max-height:460px) and (orientation:landscape){
+  header{padding:5px 12px}
+  main{padding:7px;gap:8px}
+  .chartbox{display:none}
+  footer{padding:5px 12px}
+}
+
+/* ══════════ 触摸设备：去掉 hover 位移，避免误触后卡住 ══════════ */
+@media(hover:none){
+  button:hover:not(:disabled){transform:none;background:var(--panel-2);color:var(--ink-2);border-color:var(--line)}
+  button.primary:hover:not(:disabled){background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+  button.running:hover:not(:disabled){background:var(--accent-soft);color:var(--accent)}
+}
+</style>
 </head>
 <body>
-<!--
-  占位页 —— T14 会用真正的对局界面替换掉整个 body。
 
-  为什么需要它：tools/check-dom.ts 要读 public/index.html，文件不在时
-  readFileSync 直接抛异常，start.sh 在「检查 DOM id 一致性」这一步就断。
-  同时 src/server/server.ts 的占位实现要有个东西可托管，否则 ./start.sh
-  跑到底只能看到一个 404。
+<header>
+  <h1>生命棋 <span class="x">×</span> Jev</h1>
+  <span class="sub" data-i18n="app.subtitle" data-i18n-title="app.subtitleTitle">决策由 Jev 评估模型给出</span>
+  <span class="spacer"></span>
 
-  这里刻意保留一个 id（而不是干脆不写 id）：反向检查那条路径要有真实数据
-  才算跑过。T2 时 src/client/ 还是空的，所以它一定会出现在 check-dom.ts 的
-  「没有任何 TS 引用」清单里 —— 那是预期结果，不是待修的 bug。
+  <!-- 界面语言。图标取自 Lucide `languages`（ISC），仅 stroke-width 调为与本页其余
+       hbtn 一致。刻意不用地球图标 —— 那在中文语境里常被读作「网络 / 全球」。 -->
+  <button class="hbtn" id="bLang" data-i18n-title="nav.langTitle">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/>
+      <path d="m22 22-5-10-5 10"/><path d="M14 18h6"/>
+    </svg><span class="lbl" id="langLbl" data-i18n="nav.langName">中文</span>
+  </button>
 
-  刻意不写 <script type="module" src="js/main.js">：src/client/main.ts
-  要到 T14 才存在，现在挂上去就是一个必然 404 的死引用。
--->
-<div id="app">
-  <h1>生命棋 × Jev</h1>
-  <p>占位页面。真正的对局界面在 T14 落到这里。</p>
+  <button class="hbtn" id="bGame" data-i18n-title="nav.gameTitle">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18M3 9h18"/>
+    </svg><span class="lbl" data-i18n="nav.game">游戏</span>
+  </button>
+
+  <button class="hbtn" id="bStrategy" data-i18n-title="nav.strategyTitle">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <path d="M4 7h16M4 12h10M4 17h13"/><circle cx="18" cy="12" r="2.2" fill="currentColor" stroke="none"/>
+    </svg><span class="lbl" data-i18n="nav.strategy">策略</span>
+  </button>
+
+  <button class="hbtn" id="bApi" data-i18n-title="nav.apiTitle">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <path d="M12 2v6M12 16v6M2 12h6M16 12h6"/><circle cx="12" cy="12" r="3.4"/>
+    </svg><span class="lbl">API</span>
+  </button>
+
+  <button class="hbtn" id="bLog" data-i18n-title="nav.logTitle">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <path d="M5 3h9l5 5v13H5z"/><path d="M14 3v5h5M8.5 13h7M8.5 17h5"/>
+    </svg><span class="lbl" data-i18n="nav.log">日志</span>
+  </button>
+
+  <button class="hbtn" id="bArchive" data-i18n-title="nav.archiveTitle">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 7h18v13H3z"/><path d="M3 7l2-3h14l2 3"/><path d="M9 12h6"/>
+    </svg><span class="lbl" data-i18n="nav.archive">存档</span>
+  </button>
+
+  <a class="hbtn gh" id="bGithub" href="https://github.com/ARCJ137442/jev-life"
+     target="_blank" rel="noopener noreferrer" data-i18n-title="nav.githubTitle">
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+    </svg>
+  </a>
+</header>
+
+<main>
+  <section class="stage">
+    <!-- 棋盘：T15 的渲染器画在这里。深色底 + 白色活细胞是生命游戏的常规配色 -->
+    <div class="board-box">
+      <canvas id="board"></canvas>
+    </div>
+
+    <div class="controls">
+      <button class="primary" id="bToggle" data-i18n-title="ctrl.takeoverTitle" data-i18n="ctrl.takeover">▶ 开始对弈</button>
+      <button id="bStep" data-i18n-title="ctrl.stepTitle" data-i18n="ctrl.step">单步</button>
+      <button id="bNew" class="ghost" data-i18n-title="ctrl.newTitle" data-i18n="ctrl.new">↺ 重开</button>
+      <button id="bResult" class="ghost" disabled data-i18n-title="ctrl.resultTitle" data-i18n="ctrl.result">终局</button>
+      <span class="hint"><kbd>Space</kbd> <span data-i18n="ctrl.hint">暂停</span></span>
+    </div>
+
+    <div class="pace">
+      <span class="lbl" data-i18n="pace.label">步进间隔</span>
+      <input type="range" id="pace" min="0" max="5000" step="100" value="1200" data-i18n-title="pace.title">
+      <span class="val" id="paceVal">1.2s</span>
+    </div>
+  </section>
+
+  <aside class="side">
+    <!-- ══ 卡片一：计分板 + 生死态势图（②），**融合在同一张卡片** ══
+         两者说的都是**游戏本身的客观状态**：计分板是本回合的瞬时值，
+         态势图是它的时间序列 —— 同一件事的两个视角。分成两张卡反而会
+         让人以为它们无关。
+
+         记分板标签固定为 ASCII（ALIVE / RATIO / TURN / A.MAX / A.MIN）：
+         每列不超过 5 个字母，窄屏也不会折行；`A.` 前缀表示「整局范围」。 -->
+    <div class="card">
+      <div class="stats">
+        <div class="stat" data-i18n-title="stat.aliveTitle"><div class="k">Alive</div><div class="v" id="sAlive">0</div></div>
+        <div class="stat" data-i18n-title="stat.ratioTitle"><div class="k">Ratio</div><div class="v hi" id="sRatio">0.0%</div></div>
+        <div class="stat" data-i18n-title="stat.turnTitle"><div class="k">Turn</div><div class="v" id="sTurn">0</div></div>
+        <div class="stat" data-i18n-title="stat.maxTitle"><div class="k">A.Max</div><div class="v" id="sMax">0</div></div>
+        <div class="stat" data-i18n-title="stat.minTitle"><div class="k">A.Min</div><div class="v" id="sMin">0</div></div>
+      </div>
+      <div class="chartbox" id="momentumBox">
+        <div class="cap"><span data-i18n="chart.mom.title">生死态势</span></div>
+        <canvas id="momentum"></canvas>
+      </div>
+    </div>
+
+    <!-- ══ 卡片二：决策热力图（③）+ 本回合的决策读数 ══
+         ③ 的身份就是 2048 那张「各决策概率」条形图 —— **替换**掉它，不是新增。
+         2048 只有四个候选，只能画成四根横条；生命棋有 N² 个候选，可以画成
+         一张与棋盘同形的热力图。它**不叠在真棋盘上**：真棋盘只表达「当前局面」
+         这一件事，让概率去染它的格子，两件事就糊在一起了。 -->
+    <div class="dec">
+      <div class="dec-head"><span class="dot"></span><span data-i18n="decision.title">本回合决策</span><span class="turn" id="dTurn"></span></div>
+      <div class="heatbox" id="heatBox"><canvas id="heat"></canvas></div>
+      <div id="decision" class="prows"><div class="idle" data-i18n="decision.idle">尚未开始</div></div>
+    </div>
+
+    <!-- ══ 卡片三：置信度面积图（①）══
+         它是唯一一个**纯历史的、与当前局面无关**的视图，放在最下不挡当下的判断。
+         与 ③ 的区别在时间维度：① 是历史上每一手有多集中，③ 是当回合的空间分布。 -->
+    <div class="chartbox" id="chartBox">
+      <div class="cap">
+        <span data-i18n="chart.conf.title">置信度追踪</span>
+        <span class="lgd">
+          <span><i style="background:var(--green)"></i><span data-i18n="log.roleLife">生之执</span></span>
+          <span><i style="background:var(--red)"></i><span data-i18n="log.roleDeath">死之执</span></span>
+        </span>
+      </div>
+      <canvas id="chart"></canvas>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <span><span class="led" id="led"></span><span id="status" data-i18n="status.ready">就绪</span></span>
+  <span data-i18n-title="status.costs"><span data-i18n="stats.total">累计</span> <b id="cost">$0.000000</b></span>
+  <span data-i18n-title="stats.avgCostTitle"><span data-i18n="stats.avgCost">均次</span> <b id="avgCost">—</b></span>
+  <span><span data-i18n="stats.latency">延迟</span> <b id="lat">—</b></span>
+  <span class="spacer"></span>
+  <span id="backend">—</span>
+</footer>
+
+<div class="scrim" id="scrim"></div>
+<div id="toast" class="toast"></div>
+<input type="file" id="fileInput" accept="application/json,.json" hidden>
+
+<!-- ══════ 不兼容存档提示 ══════ -->
+<div class="modal" id="incompatModal">
+  <div class="modal-box">
+    <h2 data-i18n="incompat.title">发现不兼容的旧存档</h2>
+    <div class="warn">
+      <b data-i18n="incompat.desc">本机存有一份旧数据，但当前版本读不懂它。</b><br>
+      <span data-i18n="incompat.whyEdited">它可能是更早版本写下的，或者已被外部修改。</span><br>
+      <span data-i18n="incompat.whyKept">为避免丢掉你原本的进度，应用</span><b data-i18n="incompat.none">没有</b><span data-i18n="incompat.whyDecide">自动清理它 —— 请先决定如何处理。</span>
+    </div>
+    <div class="field">
+      <label data-i18n="incompat.reason">读取失败的原因</label>
+      <div class="desc" id="incompatReason" style="margin-bottom:0"></div>
+    </div>
+    <div class="field">
+      <label><span data-i18n="incompat.raw">原始数据（截断预览，大小</span> <span id="incompatSize"></span>）</label>
+      <pre class="rawbox" id="incompatPreview"></pre>
+    </div>
+    <div class="notice-line">
+      <b style="color:var(--accent)" data-i18n="incompat.force">强行加载</b><span data-i18n="incompat.salvage">会尽力从这份数据里抢救出可用的部分。</span><br>
+      <span data-i18n="incompat.order">建议顺序：先「导出旧数据」留底，再决定强行加载还是重置。</span>
+    </div>
+    <div class="actions-wrap">
+      <button id="bIncompatExport" data-i18n="incompat.export">⬇ 导出旧数据</button>
+      <button id="bIncompatForce" class="primary" data-i18n="incompat.force">强行加载</button>
+      <button id="bIncompatReset" class="danger" data-i18n="incompat.reset">重置回默认</button>
+      <button id="bIncompatLater" class="ghost" data-i18n="incompat.later">稍后再说</button>
+    </div>
+  </div>
 </div>
+
+<!-- ══════ 额度不足提示 ══════ -->
+<div class="modal" id="quotaModal">
+  <div class="modal-box">
+    <h2 data-i18n="quota.title">额度不足</h2>
+    <div class="warn">
+      <b data-i18n="quota.desc">当前后端的调用额度已用尽或被限流。</b><br>
+      <span data-i18n="quota.notNetwork">这通常不是网络问题，重试也不会恢复 —— 换个后端或用自己的 Key 即可继续。</span>
+    </div>
+    <div class="field">
+      <label data-i18n="quota.serverReturned">服务端返回</label>
+      <pre class="rawbox" id="quotaDetail"></pre>
+    </div>
+    <div class="field">
+      <label data-i18n="quota.whatCanDo">可以怎么做</label>
+      <div class="desc" style="margin-bottom:0;line-height:1.75">
+        <span data-i18n="quota.step1">1. 切到</span> <b data-i18n="quota.gatewayBold">Vercel AI Gateway 直连</b><span data-i18n="quota.gatewayHint">，填自己的 API Key（推荐，额度归你掌控）</span><br>
+        <span data-i18n="quota.step2">2. 换用</span> <b data-i18n="quota.official">TypeSafe 官方</b> <span data-i18n="quota.or">或</span> <b>OpenRouter</b> <span data-i18n="quota.backendWord">后端</span><br>
+        <span data-i18n="quota.step3">3. 稍后再试 —— 如果是共享额度的免费试用，等它恢复</span>
+      </div>
+    </div>
+    <div class="actions-wrap">
+      <button id="bQuotaSwitch" class="primary" data-i18n="quota.switch">去切换后端</button>
+      <button id="bQuotaClose" class="ghost" data-i18n="incompat.later">稍后再说</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ 游戏：**对局级**设置 —— 两边共享，改了它不是同一个游戏 ══════ -->
+<aside class="drawer" id="dGame">
+  <header>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18M3 9h18"/>
+    </svg>
+    <div>
+      <h2 data-i18n="nav.game">游戏</h2>
+      <p data-i18n="game.desc">这些是对局级设置：两边不同就不是同一个游戏。</p>
+    </div>
+  </header>
+  <div class="body">
+    <!-- ★ 生命棋与 2048 相反的一条：这里改任何东西**都会**进入 Jev 的输入。
+         2048 的规则自明（谁都知道 2048 怎么玩），生命棋的规则不自明 ——
+         尺寸、拓扑、胜负线、回合上限全部由 core 现算写进 state.rules，
+         所以改「游戏」项之后概率分布**应当**变化。 -->
+    <div class="warn">
+      <b data-i18n="nav.game">游戏</b><br>
+      <span data-i18n="game.noteInput">与 2048 相反：生命棋的规则不自明，所以这里的每一项都会写进发给 Jev 的 state —— 改完之后概率分布**应当**变化；若没变，那才是 bug。</span>
+    </div>
+
+    <div class="field">
+      <label data-i18n="game.boardSize">棋盘尺寸</label>
+      <div class="desc" data-i18n="game.sizeHint"></div>
+      <div class="presets" id="sizeList"></div>
+    </div>
+
+    <div class="field">
+      <label data-i18n="game.topology">边界拓扑</label>
+      <select id="inpTopology">
+        <option value="bounded" data-i18n="game.topoBounded">有界</option>
+        <option value="torus" data-i18n="game.topoTorus">环绕</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label data-i18n="game.rules">终局规则</label>
+      <div class="slider-row">
+        <span class="tinylbl" style="margin:0" data-i18n="game.turnLimit">回合上限</span>
+        <input type="number" class="numin" id="inpTurnLimit" min="1" max="999" step="1" value="90">
+      </div>
+      <div class="tinylbl" data-i18n="game.turnLimitHint">到上限仍未分出胜负判和局。</div>
+      <div class="warnline" id="turnLimitWarn" data-i18n="game.turnLimitWarn">回合上限必须是 1 以上的整数</div>
+      <div class="desc" id="rulesNote" style="margin-top:9px;margin-bottom:0"></div>
+    </div>
+
+    <div class="field">
+      <label data-i18n="game.fx">动效</label>
+      <label class="switch" style="margin-bottom:9px">
+        <input type="checkbox" id="inpAnim" checked>
+        <span class="track"></span><span class="txt" data-i18n="game.fxAnim">落子与演化的缩放动画</span>
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="inpParticles" checked>
+        <span class="track"></span><span class="txt" data-i18n="game.fxParticles">落子处的发光粒子</span>
+      </label>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- ★ 开局在「游戏本身的属性」**下方**，且尺寸控件在前。
+         顺序体现的是依赖：开局库按尺寸分级（4/8/16 各一套，见 presets.ts），
+         尺寸变了可选开局就跟着变 —— 反过来的话，用户会先选一个开局、
+         再改尺寸，然后发现选的那个没了。 -->
+    <div class="section-head">
+      <span class="sec-title" data-i18n="game.opening">开局</span>
+      <span class="sec-note" data-i18n="game.openingHint">开局库按尺寸分级 —— 先定尺寸，再选开局。</span>
+    </div>
+    <div class="openings" id="openingList"></div>
+  </div>
+  <footer>
+    <button id="bGameReset" class="ghost" data-i18n-title="game.resetTitle" data-i18n="game.reset">恢复默认</button>
+    <span style="flex:1"></span>
+    <button id="bGameDone" class="primary" data-i18n="game.done">完成</button>
+  </footer>
+</aside>
+
+<!-- ══════ 策略：**玩家级**设置 —— 两边各一份，这正是跨模型对照的用法 ══════ -->
+<aside class="drawer" id="dStrategy">
+  <header>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <path d="M4 7h16M4 12h10M4 17h13"/><circle cx="18" cy="12" r="2.2" fill="currentColor" stroke="none"/>
+    </svg>
+    <div>
+      <h2 data-i18n="nav.strategy">策略</h2>
+      <p data-i18n="strategy.desc">分两部分：上下文决定 Jev 看到什么，规则决定拿到答案后怎么落实。</p>
+    </div>
+  </header>
+  <div class="body">
+    <div class="roletabs">
+      <button class="roletab on" data-role="life" data-i18n="log.roleLife">生之执</button>
+      <button class="roletab" data-role="death" data-i18n="log.roleDeath">死之执</button>
+    </div>
+    <div class="note" id="roleHint"></div>
+
+    <div class="section-head">
+      <span class="sec-title" data-i18n="strategy.ctx">上下文</span>
+      <span class="sec-note" data-i18n="strategy.ctxNote">改动会进入请求，影响 Jev 的判断 —— 效果看「概率分布」</span>
+    </div>
+
+    <div class="field">
+      <label data-i18n="strategy.ruleNoteLabel">规则说明（补充）→ rules.rule_note</label>
+      <div class="desc" data-i18n="strategy.ruleNoteDesc"></div>
+      <textarea id="ruleNote" rows="4"></textarea>
+    </div>
+
+    <div class="field">
+      <label data-i18n="strategy.hintLabel">策略提示 → aids.strategy_hint</label>
+      <div class="desc" data-i18n="strategy.hintDesc"></div>
+      <textarea id="hintText" rows="5"></textarea>
+    </div>
+
+    <div class="field">
+      <label class="switch">
+        <input type="checkbox" id="inpPredict">
+        <span class="track"></span><span class="txt" data-i18n="strategy.predictLabel">后果预测</span>
+      </label>
+      <div class="desc" style="margin-top:8px;margin-bottom:0" data-i18n="strategy.predictDesc"></div>
+    </div>
+
+    <!-- ★ 自动结构识别：**默认开**，持久化。它不依赖 LLM 适配器 ——
+         关掉它就是「把脚手架整个拆掉，看模型还剩多少」，与 aids 分层的用意同源。 -->
+    <div class="field">
+      <label class="switch">
+        <input type="checkbox" id="inpDetect" checked>
+        <span class="track"></span><span class="txt" data-i18n="strategy.detectLabel">自动结构识别</span>
+      </label>
+      <div class="desc" style="margin-top:8px;margin-bottom:0" data-i18n="strategy.detectDesc"></div>
+    </div>
+
+    <div class="field">
+      <label data-i18n="strategy.memoryLabel">记忆轮数 → recent_history</label>
+      <div class="desc" data-i18n="strategy.memoryDesc"></div>
+      <div class="slider-row">
+        <input type="range" id="inpMemory" min="0" max="60" step="1" value="0">
+        <span class="val" id="memoryVal">0</span>
+        <button class="mini" id="bMemMax" data-i18n-title="strategy.maxTitle" data-i18n="strategy.max">最大</button>
+      </div>
+      <div class="tinylbl" data-i18n="strategy.memoryNote"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="section-head">
+      <span class="sec-title" data-i18n="strategy.rule">规则</span>
+      <span class="sec-note" data-i18n="strategy.ruleNote">不进入请求，Jev 看不到 —— 效果看「实际走了哪一步」</span>
+    </div>
+
+    <div class="field">
+      <label data-i18n="strategy.policy">决策策略</label>
+      <select id="inpStrategy">
+        <option value="greedy" data-i18n="strategy.greedy">贪心</option>
+        <option value="sample" data-i18n="strategy.sample">概率采样</option>
+        <option value="threshold" data-i18n="strategy.thresholdOpt">置信度门槛</option>
+      </select>
+      <div class="desc" style="margin-top:6px;margin-bottom:0" data-i18n="strategy.noHeuristic"></div>
+    </div>
+
+    <div class="field" id="thresholdRow" style="display:none">
+      <label data-i18n="strategy.thresholdLabel">置信度门槛</label>
+      <div class="desc" data-i18n="strategy.thresholdNote"></div>
+      <div class="slider-row">
+        <input type="range" id="inpThreshold" min="0" max="100" step="5" value="0">
+        <span class="val" id="thresholdVal">0%</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label data-i18n="strategy.channel">评估通道</label>
+      <div class="desc" data-i18n="strategy.channelNote"></div>
+      <select id="inpChannel">
+        <option value="noul-all" data-i18n="strategy.channelNoulAll">noul-all — 每个合法格一道布尔题</option>
+      </select>
+    </div>
+
+    <!-- ★ 双侧同步：一个**动作**，不是分区的属性。方向由当前选中的玩家决定，
+         所以一个按钮就够（切到另一边再点一次就是反方向） -->
+    <div class="syncrow">
+      <button id="bStrategySync" data-i18n-title="strategy.syncTitle">复制到另一方</button>
+    </div>
+  </div>
+  <footer>
+    <button id="bStrategyReset" class="ghost" data-i18n-title="strategy.resetTitle" data-i18n="strategy.reset">恢复默认</button>
+    <span style="flex:1"></span>
+    <button id="bStrategyDone" class="primary" data-i18n="strategy.done">完成</button>
+  </footer>
+</aside>
+
+<!-- ══════ API：**怎么跟模型打交道** —— 选谁（后端 / 模型 / 密钥）与怎么谈（重试） ══════ -->
+<aside class="drawer" id="dApi">
+  <header>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <path d="M12 2v6M12 16v6M2 12h6M16 12h6"/><circle cx="12" cy="12" r="3.4"/>
+    </svg>
+    <div>
+      <h2>API</h2>
+      <p data-i18n="api.desc">怎么跟模型打交道：选谁（后端 / 模型 / 密钥）与怎么谈（重试、超时）。</p>
+    </div>
+  </header>
+  <div class="body">
+    <div class="roletabs">
+      <button class="roletab on" data-role="life" data-i18n="log.roleLife">生之执</button>
+      <button class="roletab" data-role="death" data-i18n="log.roleDeath">死之执</button>
+    </div>
+    <div class="note" data-i18n="api.roleNote"></div>
+
+    <div class="warn">
+      <b data-i18n="api.keySafety">密钥安全</b><br>
+      <span data-i18n="api.keyNote">只有选「直连」类后端时才需要填写。密钥仅存于当前页面的内存，刷新即清除，不会写入本地存储，也不会随存档导出。</span>
+    </div>
+
+    <div class="field"><label data-i18n="api.backend">后端</label><select id="selBackend"></select></div>
+    <div class="field"><label>API Key</label><input type="password" id="inpKey" autocomplete="off"></div>
+    <div class="field">
+      <label>Model ID</label>
+      <input type="text" id="inpModel">
+      <div class="tinylbl" id="modelHint"></div>
+    </div>
+
+    <div id="advancedApi">
+      <div class="field">
+        <label>Base URL</label>
+        <input type="text" id="inpBase">
+        <div class="tinylbl" data-i18n="api.customOnly">只有自建 / 直连后端需要改这里</div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label data-i18n="api.retry">自动重试</label>
+      <div class="desc">
+        <span data-i18n="api.retryNote">只对瞬时故障重试（网络错误 / 429 / 5xx）。参数错误、鉴权失败会直接报错。填</span> <code>inf</code> <span data-i18n="api.retryInfNote">表示无限重试。</span>
+      </div>
+      <div class="row2">
+        <input type="text" id="inpRetryMax" data-i18n-ph="api.phRetryMax">
+        <input type="number" id="inpRetryBase" min="100" max="10000" step="100" data-i18n-ph="api.phRetryBase">
+      </div>
+      <div class="tinylbl" id="retryPreview"></div>
+    </div>
+
+    <div class="note" id="backendNote"></div>
+
+    <div class="syncrow">
+      <button id="bApiSync" data-i18n-title="strategy.syncTitle">复制到另一方</button>
+    </div>
+  </div>
+  <footer>
+    <button id="bApiReset" class="ghost" data-i18n-title="api.resetTitle" data-i18n="api.reset">恢复默认</button>
+    <span style="flex:1"></span>
+    <button id="bApiClose" class="ghost" data-i18n="api.cancel">取消</button>
+    <button id="bApiSave" class="primary" data-i18n="api.save">保存</button>
+  </footer>
+</aside>
+
+<!-- ══════ 日志：按回合折叠，展开看完整请求 / 回包 ══════ -->
+<aside class="drawer wide" id="dLog">
+  <header>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <path d="M5 3h9l5 5v13H5z"/><path d="M14 3v5h5M8.5 13h7M8.5 17h5"/>
+    </svg>
+    <div><h2><span data-i18n="log.title">调用日志</span> <span id="logCount" style="font:400 11px var(--mono);color:var(--ink-4)"></span></h2>
+    <p data-i18n="log.desc">每个回合一条：双方各自的请求体与回包。</p></div>
+  </header>
+  <div class="body" id="logList"><div class="idle" data-i18n="log.empty">还没有请求记录</div></div>
+  <footer>
+    <button id="bCopyAll" data-i18n="log.copyAll">复制全部</button>
+    <button id="bLogClear" class="ghost" data-i18n-title="log.clearTitle" data-i18n="log.clear">清空</button>
+    <span style="flex:1"></span>
+    <button id="bLogDone" class="primary" data-i18n="archive.done">完成</button>
+  </footer>
+</aside>
+
+<!-- ══════ 存档：导入导出 ══════ -->
+<aside class="drawer" id="dArchive">
+  <header>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 7h18v13H3z"/><path d="M3 7l2-3h14l2 3"/><path d="M9 12h6"/>
+    </svg>
+    <div>
+      <h2 data-i18n="nav.archive">存档</h2>
+      <p data-i18n="archive.desc">各类内容各自独立成档，可分别备份与恢复。</p>
+    </div>
+  </header>
+  <div class="body">
+    <div class="field">
+      <label data-i18n="archive.game">对局（棋盘与进程）</label>
+      <div class="desc" data-i18n="archive.gameDesc"></div>
+      <div class="row2">
+        <button id="bExpGame" data-i18n="archive.export">导出</button>
+        <button id="bImpGame" data-i18n="archive.import">导入</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label data-i18n="nav.strategy">策略</label>
+      <div class="desc" data-i18n="archive.strategyDesc"></div>
+      <div class="row2">
+        <button id="bExpStrategy" data-i18n="archive.export">导出</button>
+        <button id="bImpStrategy" data-i18n="archive.import">导入</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>API</label>
+      <div class="desc"><span data-i18n="archive.apiDesc">自动重试参数。</span><b data-i18n="archive.noKey">不含密钥</b> <span data-i18n="archive.noKeyDesc">—— 密钥从不落盘，因此也无法导出。</span></div>
+      <div class="row2">
+        <button id="bExpApi" data-i18n="archive.export">导出</button>
+        <button id="bImpApi" data-i18n="archive.import">导入</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label data-i18n="log.title">调用日志</label>
+      <div class="desc" data-i18n="archive.logDesc"></div>
+      <div class="row2">
+        <button id="bExpLog" data-i18n="archive.export">导出</button>
+        <button disabled data-i18n-title="archive.logExportOnly" data-i18n="archive.import">导入</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="field">
+      <label data-i18n="archive.all">整体</label>
+      <div class="row2">
+        <button id="bExpAll" data-i18n="archive.exportAll">导出全部</button>
+        <button id="bArchiveWipe" class="ghost" data-i18n-title="archive.wipeTitle" data-i18n="archive.wipe">清空存档</button>
+      </div>
+    </div>
+  </div>
+  <footer><span style="flex:1"></span><button id="bArchiveDone" class="primary" data-i18n="archive.done">完成</button></footer>
+</aside>
+
+<script type="module" src="./js/client/main.js"></script>
 </body>
 </html>

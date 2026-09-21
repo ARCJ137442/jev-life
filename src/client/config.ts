@@ -1,0 +1,347 @@
+/**
+ * 配置持久化。
+ *
+ * 写入 localStorage 的只有**非敏感**内容：对局级设置、双方玩家的设置、重试参数。
+ * API Key 绝不落盘 —— 它只存在于内存（代理模式下更是连浏览器都拿不到）。
+ *
+ * ═══ 分成两级：对局级 / 玩家级（DESIGN 第七节）═══
+ *
+ * | 级别 | 项 | 判据 |
+ * |---|---|---|
+ * | 对局级 | 尺寸 / 拓扑 / 终局规则 / 开局 | 它们是**博弈的定义**，两边不同就不是同一个游戏 |
+ * | 玩家级 | 后端 / 模型 / 上下文 / 决策策略 / 阈值 … | 描述**这个玩家怎么想** |
+ *
+ * 2048 那套「影响谁的输入」的判据在生命棋里失效了（规则不自明、换后端就是换
+ * 一套 prompt 构造方式，两者**都**影响模型的输入）。这一版按级别分。
+ *
+ * ★ **后端与模型是玩家级的**，这一条不能退。跨模型对照（Jev 当生执、LLM 当死执）
+ * 恰恰要求两边能选不同的后端；后端若只有一份，这个配置根本配不出来。
+ * 代价是「双侧同步」必须是一个**动作**（把 A 的玩家级设置整体复制到 B），
+ * 否则每换一次对照都要手配两遍。见 `main.ts` 的 `syncRoleSettings()`。
+ */
+import type { Role, Topology } from "../core/types.js";
+import type { Channel } from "../core/channels.js";
+import type { Strategy } from "../core/decide.js";
+import type { BackendId } from "./api.js";
+import { BACKENDS } from "./api.js";
+import { detectLang, type Lang } from "./i18n.js";
+import { PRESETS } from "../core/presets.js";
+import type { SizePreset } from "../core/presets.js";
+
+const KEY = "jevlife.v1";
+
+/* ══════════════ 对局级 ══════════════ */
+
+export interface DuelSettings {
+  /** 棋盘尺寸。只接受 `PRESETS` 里的三档 —— 每档的规则与开局库都是单独配的 */
+  cols: number;
+  rows: number;
+  topology: Topology;
+  /**
+   * 回合上限。
+   *
+   * ★ 它**同时是「游戏」项与「模型输入」**：`core/context.ts` 的 `horizon`
+   * 会把「本局共 N 回合，当前第 T 回合」写进 state。所以把 90 改成 60 之后
+   * 重开一局，**概率分布必须变化** —— 那是关卡二的验收标准之一。
+   */
+  turnLimit: number;
+  /** 开局 id。开局库按尺寸分级，换尺寸时它会自动落到该尺寸的第一项 */
+  openingId: string;
+  animations: boolean;
+  /** 落子处的发光粒子 */
+  particles: boolean;
+  paceMs: number;
+}
+
+/* ══════════════ 玩家级 ══════════════ */
+
+/**
+ * 评估通道。
+ *
+ * M1 只有 `noul-all`（每个合法格一道布尔题）。类型上留成字符串而不是
+ * `"noul-all"` 字面量，是为了 T13 补 `choice-all` / `choice-filtered` 时
+ * 存档不用改版本号 —— 不认识的通道在载入时回落到 `noul-all`。
+ */
+export type ChannelId = string;
+
+export interface RoleSettings {
+  provider: BackendId;
+  base: string;
+  model: string;
+  channel: ChannelId;
+  strategy: Strategy;
+  /** 置信度门槛 0–1。0 表示不启用 */
+  threshold: number;
+  /** 记忆轮数：0 = 不加入；null = 最大（在上下文预算内塞满） */
+  memory: number | null;
+  /** 后果预测 → 写进题面当**背景**（默认关） */
+  predictOutcome: boolean;
+  /** 自动结构识别 → aids.detected_patterns（**默认开**） */
+  detectPatterns: boolean;
+  /** 规则说明（补充）→ rules.rule_note */
+  ruleNote: string;
+  /** 策略提示 → aids.strategy_hint */
+  strategyHint: string;
+  /* ⚠ 将来要加的四项 —— 思维链开关 / 是否允许思考 / 思考强度 / 调用策略 ——
+     等 `llm-json` / `llm-tool` 适配器落地时一并加，完整理由见 `main.ts`
+     策略抽屉顶部那段注释。在那之前它们没有消费者，加进来就是死配置。 */
+}
+
+/** 非敏感的重试参数。两个玩家共用 —— 它描述的是「本机怎么等」，不是「这个玩家怎么想」 */
+export interface ApiSettings {
+  retryMax: number | null;
+  retryBaseMs: number;
+}
+
+/**
+ * 存档那一层需要的三块设置。
+ *
+ * 单独取一个名字而不是直接收 `Persisted`：存档**不该碰界面语言**，
+ * 也不该碰任何将来会加进 `Persisted` 的界面状态。收窄成这三块之后，
+ * 「导出里混进了不该导出的东西」在类型上就发生不了。
+ */
+export interface ArchiveSettings {
+  duel: DuelSettings;
+  roles: Record<Role, RoleSettings>;
+  api: ApiSettings;
+}
+
+export interface Persisted {
+  duel: DuelSettings;
+  /** 双方各自的设置。键的顺序即渲染顺序（life 在前） */
+  roles: Record<Role, RoleSettings>;
+  api: ApiSettings;
+  /**
+   * 界面语言。刻意放在顶层而**不放进任何一级设置**：它是应用级设置，
+   * 不该被「恢复默认」连坐重置。
+   */
+  lang: Lang;
+}
+
+/* ══════════════ 默认值 ══════════════ */
+
+/** 默认尺寸是设计文档的基准档（8×8）。它的内区恰好 4×4，开局库也最完整 */
+const DEFAULT_COLS = 8;
+const DEFAULT_ROWS = 8;
+
+export function presetFor(cols: number, rows: number): SizePreset {
+  return (
+    PRESETS.find((p) => p.cols === cols && p.rows === rows) ?? (PRESETS[1] ?? PRESETS[0])
+  );
+}
+
+/** 某个尺寸下的默认回合上限 —— 取自预设，不是写死的常量（4×4 是 30，其余是 90） */
+function defaultTurnLimit(cols: number, rows: number): number {
+  return presetFor(cols, rows).rules.turnLimit;
+}
+
+function defaultOpeningId(cols: number, rows: number): string {
+  const preset = presetFor(cols, rows);
+  return preset.openings[0]?.id ?? "";
+}
+
+export const DEFAULT_DUEL: DuelSettings = {
+  cols: DEFAULT_COLS,
+  rows: DEFAULT_ROWS,
+  topology: presetFor(DEFAULT_COLS, DEFAULT_ROWS).defaultTopology,
+  turnLimit: defaultTurnLimit(DEFAULT_COLS, DEFAULT_ROWS),
+  openingId: defaultOpeningId(DEFAULT_COLS, DEFAULT_ROWS),
+  animations: true,
+  particles: true,
+  paceMs: 1200,
+};
+
+export const DEFAULT_API: ApiSettings = {
+  retryMax: 3,
+  retryBaseMs: 800,
+};
+
+/**
+ * 一个玩家级设置的出厂值。
+ *
+ * 两个玩家**用同一份默认**（而不是各写一份）—— 出厂状态下 Jev vs Jev 应当
+ * 是公平的；「两边不一样」是用户主动配出来的对照条件，不是默认条件。
+ */
+export function defaultRole(): RoleSettings {
+  return {
+    provider: "localproxy",
+    base: BACKENDS.localproxy.base,
+    model: BACKENDS.localproxy.model,
+    channel: "noul-all",
+    strategy: "greedy",
+    threshold: 0,
+    memory: 0,
+    predictOutcome: false,
+    detectPatterns: true,
+    ruleNote: "",
+    strategyHint: "",
+  };
+}
+
+/* ══════════════ 校验 ══════════════ */
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** 某一下标取值是否在预设里 —— 不在就回落到默认档 */
+function clampSize(cols: unknown, rows: unknown): { cols: number; rows: number } {
+  const c = Math.round(Number(cols));
+  const r = Math.round(Number(rows));
+  const hit = PRESETS.find((p) => p.cols === c && p.rows === r);
+  return hit ? { cols: hit.cols, rows: hit.rows } : { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
+}
+
+function clampTopology(v: unknown, fallback: Topology): Topology {
+  return v === "torus" || v === "bounded" ? v : fallback;
+}
+
+export function clampTurnLimit(v: unknown, fallback: number): number {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(999, Math.max(1, n));
+}
+
+/**
+ * 步进间隔。下限是 **0** —— 那不是「没有间隔」，而是「不等待」：
+ * 上游响应多快就多快，用于测极限速度。
+ *
+ * 注意不能用 `Number(v) || 默认值` 兜底：0 是 falsy，会被吞掉换成默认值，
+ * 于是「选了最快」变成「回到默认」，而且没有任何报错。
+ */
+export function clampPace(v: unknown): number {
+  if (v === "" || v === null || v === undefined) return DEFAULT_DUEL.paceMs;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return DEFAULT_DUEL.paceMs;
+  return Math.min(5000, Math.max(0, Math.round(n)));
+}
+
+export function clamp01(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(1, Math.max(0, n));
+}
+
+/** 记忆轮数上限（防止 UI 滑块给出荒谬值） */
+export const MAX_MEMORY = 60;
+
+/** 重试次数上限（UI 侧护栏，无限重试用 null 表示） */
+export const MAX_RETRY = 20;
+
+function clampMemory(v: unknown): number | null {
+  if (v === null) return null;
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(MAX_MEMORY, n));
+}
+
+function clampStrategy(v: unknown): Strategy {
+  return v === "sample" || v === "threshold" ? v : "greedy";
+}
+
+function clampBackend(v: unknown): BackendId {
+  return typeof v === "string" && v in BACKENDS ? (v as BackendId) : "localproxy";
+}
+
+function clampChannel(v: unknown): ChannelId {
+  return v === "noul-all" ? v : "noul-all";
+}
+
+/** 开局：id 在**该尺寸**下存在才认，否则回落到该尺寸的第一项 */
+export function clampOpeningId(v: unknown, cols: number, rows: number): string {
+  const preset = presetFor(cols, rows);
+  const hit = typeof v === "string" ? preset.openings.find((o) => o.id === v) : undefined;
+  return hit?.id ?? preset.openings[0]?.id ?? "";
+}
+
+/** 把某个玩家的设置变成 `core/channels.ts` 的 `Channel` */
+export function channelOf(settings: RoleSettings): Channel {
+  // backend 只在布尔族通道上出场：判别值（noul / boolean）是「怎么跟上游说话」
+  // 的细节，代理那边还会按它自己的上游再归一化一次
+  return { kind: "noul-all", backend: settings.provider };
+}
+
+/* ══════════════ 读写 ══════════════ */
+
+function safeParse(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const o: unknown = JSON.parse(raw);
+    return isObj(o) ? o : null;
+  } catch {
+    return null;
+  }
+}
+
+function readRole(raw: unknown): RoleSettings {
+  const d = defaultRole();
+  if (!isObj(raw)) return d;
+  const provider = clampBackend(raw.provider);
+  const preset = BACKENDS[provider];
+  return {
+    provider,
+    // 代管后端的端点与模型由服务端决定：存档里存过什么一律作废，
+    // 否则改一次服务端路由，老存档就会指着一条不存在的路径
+    base: preset.managed ? preset.base : typeof raw.base === "string" && raw.base ? raw.base : preset.base,
+    model: preset.managed ? preset.model : typeof raw.model === "string" ? raw.model : preset.model,
+    channel: clampChannel(raw.channel),
+    strategy: clampStrategy(raw.strategy),
+    threshold: clamp01(raw.threshold),
+    memory: raw.memory === null ? null : clampMemory(raw.memory ?? 0),
+    predictOutcome: raw.predictOutcome === true,
+    // ★ 默认开：只有显式存过 false 才关。写成 `?? true` 会让 undefined 走对，
+    // 但会让「存过 null」这类脏数据也变成开 —— 这里只认布尔
+    detectPatterns: raw.detectPatterns === undefined ? d.detectPatterns : raw.detectPatterns === true,
+    ruleNote: typeof raw.ruleNote === "string" ? raw.ruleNote : d.ruleNote,
+    strategyHint: typeof raw.strategyHint === "string" ? raw.strategyHint : d.strategyHint,
+  };
+}
+
+export function load(): Persisted {
+  const o = safeParse(typeof localStorage === "undefined" ? null : localStorage.getItem(KEY));
+
+  const rawLang = o?.lang;
+  const lang: Lang = rawLang === "en" || rawLang === "zh" ? rawLang : detectLang();
+
+  const rawDuel = isObj(o?.duel) ? o.duel : {};
+  const size = clampSize(rawDuel.cols ?? DEFAULT_DUEL.cols, rawDuel.rows ?? DEFAULT_DUEL.rows);
+  const preset = presetFor(size.cols, size.rows);
+
+  const rawApi = isObj(o?.api) ? o.api : {};
+  const rawRoles = isObj(o?.roles) ? o.roles : {};
+
+  return {
+    duel: {
+      cols: size.cols,
+      rows: size.rows,
+      topology: clampTopology(rawDuel.topology, preset.defaultTopology),
+      turnLimit: clampTurnLimit(rawDuel.turnLimit, preset.rules.turnLimit),
+      openingId: clampOpeningId(rawDuel.openingId, size.cols, size.rows),
+      animations: rawDuel.animations !== false,
+      particles: rawDuel.particles !== false,
+      paceMs: clampPace(rawDuel.paceMs),
+    },
+    roles: {
+      life: readRole(rawRoles.life),
+      death: readRole(rawRoles.death),
+    },
+    api: {
+      retryMax:
+        rawApi.retryMax === null
+          ? null
+          : Math.max(0, Math.min(MAX_RETRY, Math.round(Number(rawApi.retryMax ?? DEFAULT_API.retryMax) || 0))),
+      retryBaseMs: Math.max(
+        100,
+        Math.min(10_000, Number(rawApi.retryBaseMs ?? DEFAULT_API.retryBaseMs) || 800),
+      ),
+    },
+    lang,
+  };
+}
+
+export function save(p: Persisted): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(p));
+  } catch {
+    /* 隐私模式 / 配额满 —— 静默降级，不影响游戏 */
+  }
+}
