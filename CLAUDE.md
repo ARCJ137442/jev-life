@@ -115,19 +115,28 @@ src/core/                ★ 无 DOM、无网络，Node 直接可跑
   life.ts                ✓ 演化 / 翻转 / 合法格 / 状态哈希 / 终局判定
   patterns.ts            ✓ 结构检测库（按棋盘尺寸分级收录）
   presets.ts             ✓ 尺寸预设 + 开局库
-  context.ts             ⏳ buildState / buildQuestions（T10）
+  context.ts             ✓ buildState / buildQuestions（★ 见下方「T12 必须做的一次搬迁」）
   decide.ts              ⏳ 概率分布 → 动作（T11）
   channels.ts            ⏳ 三条评估通道（T13）
-src/shared/types.ts      ⏳ 共享类型；Jev 协议段在 T12 搬入（`src/shared/` 目录已存在但为空）
+src/shared/types.ts      ⏳ 共享类型；`src/shared/` 目录已存在但为空
 src/client/              ⏳ 浏览器 UI（**目录尚未创建**，T12 起）
 src/server/server.ts     ✓ 静态托管的**占位实现**（T12 换成带密钥代理的正式版）
-src/test/                ✓ 7 个测试文件，81 条用例
+src/test/                ✓ 8 个测试文件，100 条用例
 tools/                   ✓ _load / bench-step / check-dom / scan-secrets / scan / seal-key
 docs/plans/              ✓ 执行计划（M1 全部任务）
 ```
 
-> ⚠ `tools/seal-key.ts` 现在**跑不了** —— 它 import 的 `src/server/seal.ts` 要到 T12 才建，
-> 因此被排除在 `tsconfig.tools.json` 之外。T12 建出 `seal.ts` 后要把那行 exclude 删掉。
+### ⚠ T12 必须做的一次搬迁
+
+`context.ts` 里**暂时**住着 Jev 协议的最小集（`NoulType` / `Criteria` / `Question` /
+`Questions` / `noulDiscriminator`）与 `TurnRecord`。**T12 建好 `src/shared/types.ts` 后
+必须把它们搬过去并删掉原地的副本** —— 否则同一个类型会有两份，而两份类型定义迟早会
+各自演化（`jev-2048` 的 `Strategy` 类型就被定义了两遍）。
+
+### ⚠ `tools/seal-key.ts` 现在跑不了
+
+它 import 的 `src/server/seal.ts` 要到 T12 才建，因此被排除在 `tsconfig.tools.json` 之外。
+T12 建出 `seal.ts` 后要把那行 exclude 删掉。
 
 ---
 
