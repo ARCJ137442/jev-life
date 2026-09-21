@@ -202,8 +202,6 @@ interface ShownDecision {
   readonly reasonParams?: Record<string, string | number>;
   readonly coerced: boolean;
   readonly belowThreshold: boolean;
-  /** 概率前 5：`[格号, 概率]` */
-  readonly top: ReadonlyArray<readonly [Cell, number]>;
 }
 
 interface AppState {
@@ -473,10 +471,13 @@ function fitCharts(): void {
   const side = Math.min(Math.max(0, heatBox.clientWidth - 2), HEAT_MAX);
   heat.resize(side, side);
 
-  // ★ ① 与 ③ **等高**：它们并排在同一行里，高度不一致会读成「没对齐」；
-  // 而 ① 挪到这里来本来就是为了换高度，不是换宽度
+  // ★ ① 与 ③ **等高**，且宽度铺满自己那一栏：它们并排在同一行里，高度不一致
+  // 会读成「没对齐」，而 ① 挪到这里来本来就是为了换高度、不是换宽度。
+  //
+  // 不减内边距：`.confbox` 没有 padding（它不是一张卡，见 index.html 的注释），
+  // 横向边距与间距全部由 `.decrow` 的 gap 给 —— 与热力图那一栏对齐
   const confBox = $("chartBox");
-  chart.resize(Math.max(0, confBox.clientWidth - 16), side > 0 ? side : CONF_H);
+  chart.resize(Math.max(0, confBox.clientWidth), side > 0 ? side : CONF_H);
 }
 
 new ResizeObserver(() => {
@@ -548,40 +549,60 @@ function refreshCharts(): void {
 
 /* ═══════════ 决策面板 ═══════════ */
 
+/**
+ * 本回合的决策读数。
+ *
+ * ═══ 两处「不显示」是刻意的（用户 2026-09-21 定）═══
+ *
+ *   1. **不显示「概率前 5」** —— 那 5 个数在旁边的热力图上一眼就能看出个大概，
+ *      而它们占了整整一行，把真正要读的文本挤下去了
+ *   2. **不显示「取概率最高的那一格」** —— 那是 `greedy` 策略的**定义**
+ *      （`reason.takeTop`），写在「策略」抽屉里；每一回合都重复一遍等于没说话。
+ *      其余几种原因（coerced / belowThreshold / sampled）**照旧显示**：
+ *      那些说的是「这一手和默认不一样」，正是需要被看见的
+ *
+ * ═══ 分两栏 ═══
+ *
+ * 左 = 生之执、右 = 死之执（顺序即 `ROLE_ORDER`）。单人模式只有一条读数，
+ * 那时不加 `two`，它独占整行 —— 半栏里挤一条独苗会让人以为另一边没跑成。
+ */
 function renderDecision(): void {
   const host = $("decision");
   $("dTurn").textContent = state.turn ? `#${state.turn}` : "";
 
   if (!state.shown) {
+    host.className = "prows";
     host.innerHTML = `<div class="idle">${escapeHtml(t(state.shownIdleKey, state.shownIdleParams))}</div>`;
     return;
   }
 
+  const two = state.shown.length > 1;
+  host.className = two ? "prows two" : "prows";
   host.innerHTML = state.shown
     .map((d) => {
       const flags: string[] = [];
       if (d.coerced) flags.push(`<span class="flag">coerced</span>`);
       if (d.belowThreshold) flags.push(`<span class="flag">below</span>`);
-      const top = d.top
-        .map(([cell, p]) => `${rcText(cell)} ${p.toFixed(3)}`)
-        .join(" · ");
-      return `<div class="prow" style="--rc:${ROLE_META[d.role].color}">
+      // 「取概率最高的那一格」是 greedy 的定义，不在这里复述
+      const note =
+        d.reasonKey === "reason.takeTop"
+          ? ""
+          : `<div class="pnote">${escapeHtml(t(d.reasonKey, d.reasonParams))}</div>`;
+      return `<div class="pcol"><div class="prow" style="--rc:${ROLE_META[d.role].color}">
         <div class="phead">
           <span class="pwho">${escapeHtml(roleLabel(d.role))}</span>
           <span class="pcell">${t("decision.flip", { row: rowOf(d.cell), col: colOf(d.cell) })}</span>
           <span class="pp">${t("log.p")}=${d.prob.toFixed(3)}</span>
           ${flags.join("")}
         </div>
-        <div class="pnote">${escapeHtml(t(d.reasonKey, d.reasonParams))}</div>
-        <div class="ptop">${escapeHtml(t("decision.top5"))}：${escapeHtml(top)}</div>
-      </div>`;
+        ${note}
+      </div></div>`;
     })
     .join("");
 }
 
 const rowOf = (cell: Cell): number => Math.floor(cell / state.board.cols);
 const colOf = (cell: Cell): number => cell % state.board.cols;
-const rcText = (cell: Cell): string => `(${rowOf(cell)},${colOf(cell)})`;
 
 function showIdleDecision(key: string, params?: Record<string, string | number>): void {
   state.shown = null;
@@ -898,7 +919,6 @@ async function doTurn(): Promise<void> {
       reasonParams: o.reasonParams,
       coerced: o.coerced,
       belowThreshold: o.belowThreshold,
-      top: topFive(probs),
     };
   });
 
@@ -1018,13 +1038,6 @@ async function doTurn(): Promise<void> {
   } else {
     setLed("", "status.paused");
   }
-}
-
-/** 分布的前 5 名。同概率时按格子升序 —— 顺序必须是确定的 */
-function topFive(probs: CellProbabilities): ReadonlyArray<readonly [Cell, number]> {
-  return [...probs.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0] - b[0])
-    .slice(0, 5);
 }
 
 /** 一个角色的读数 → 日志行 */

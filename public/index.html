@@ -120,14 +120,22 @@ input[type=range]::-moz-range-thumb{width:13px;height:13px;border:none;border-ra
 .dec-head{display:flex;align-items:center;gap:8px;margin-bottom:9px;font:10px var(--mono);
   letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
 .dec-head .dot{width:5px;height:5px;border-radius:50%;background:var(--accent);flex-shrink:0}
-.dec-head .turn{margin-left:auto;letter-spacing:0;text-transform:none;color:var(--ink-4)}
+/* 回合号跟在标题后面（不再右对齐）—— 右边那个位置让给置信度追踪的表头 */
+.dec-head .turn{letter-spacing:0;text-transform:none;color:var(--ink-4)}
+/* 右半张图的标题 + 图例。它属于**表头这一行**，不是图上面的一层卡 */
+.dec-head .confcap{margin-left:auto;display:flex;align-items:center;gap:7px;white-space:nowrap}
+.dec-head .confcap .lgd{display:flex;gap:8px;letter-spacing:0;text-transform:none;font-size:9px}
+.dec-head .confcap .lgd i{display:inline-block;width:7px;height:7px;border-radius:2px;margin-right:3px;vertical-align:-1px}
 /* ③ 决策热力图 + ① 置信度面积图**并排**（用户实测后定，见 ui-spec 第四节）。
    两边都取 `flex:1 1 0` + `min-width:0`：画布的宽度由布局算出来，
    **不再反馈回容器** —— 否则「画布宽 → 容器宽 → 画布宽」是个环，
    而它会在某些尺寸下振荡，症状是图一直在抖或者宽度来回跳。 */
 .decrow{display:flex;gap:10px;align-items:flex-start;margin-bottom:9px}
 .decrow .heatbox{flex:1 1 0;min-width:0}
-.decrow .chartbox{flex:1 1 0;min-width:0}
+/* 置信度图**不是一张卡**：没有边框、没有底色、没有内边距，画布直接铺满这半栏
+   —— 边距与间距由 `.decrow` 的 gap 给，与热力图那一半完全对齐（用户定） */
+.decrow .confbox{flex:1 1 0;min-width:0}
+.decrow .confbox canvas{display:block;width:100%;border-radius:4px}
 /* ③ 与棋盘同形，**不叠在真棋盘上**。这里只给它一个居中的方框，绘制归 T15 */
 .heatbox{display:flex;justify-content:center}
 .heatbox canvas{display:block;border-radius:4px;background:#0b0f14;box-shadow:inset 0 0 0 1px var(--line)}
@@ -141,7 +149,10 @@ input[type=range]::-moz-range-thumb{width:13px;height:13px;border:none;border-ra
 .flag{font:9px var(--mono);color:var(--accent);border:1px solid rgba(34,211,238,.35);
   border-radius:99px;padding:0 5px}
 .pnote{font:10.5px/1.5 var(--mono);color:var(--ink-3);margin-top:3px}
-.ptop{font:10px/1.5 var(--mono);color:var(--ink-4);margin-top:2px;word-break:break-all}
+/* ★ 分两栏：左 = 生之执、右 = 死之执（用户 2026-09-21 定）。
+   单人模式下 `renderDecision` 不加 `two`，那一栏独占整行 */
+.prows.two{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start}
+.pcol{min-width:0}
 .idle{font-size:12px;color:var(--ink-4);text-align:center;padding:16px 0}
 
 .chartbox{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
@@ -489,20 +500,28 @@ textarea{resize:vertical}
          先前纵向堆叠是「先按堆叠做，窄了再折叠」的临时决定；实测下来是
          **高度不够**，所以削宽度换高度，腾出来的留给下面要读的文本。 -->
     <div class="dec">
-      <div class="dec-head"><span class="dot"></span><span data-i18n="decision.title">本回合决策</span><span class="turn" id="dTurn"></span></div>
+      <!-- 表头一行放**两张图**的标题：左对齐「本回合决策」，右对齐「置信度追踪」。
+           ★ 置信度追踪的标题与图例从图上面挪到这里（用户 2026-09-21 定）——
+           它本来是一张「卡中卡」，标题还要独占一行高度；现在它与左边那组一左
+           一右，正好是下面并排两张图的表头。 -->
+      <div class="dec-head">
+        <span class="dot"></span>
+        <span data-i18n="decision.title">本回合决策</span>
+        <span class="turn" id="dTurn"></span>
+        <span class="confcap">
+          <span data-i18n="chart.conf.title">置信度追踪</span>
+          <span class="lgd">
+            <span><i style="background:var(--green)"></i><span data-i18n="log.roleLife">生之执</span></span>
+            <span><i style="background:var(--red)"></i><span data-i18n="log.roleDeath">死之执</span></span>
+          </span>
+        </span>
+      </div>
       <div class="decrow">
         <div class="heatbox" id="heatBox"><canvas id="heat"></canvas></div>
-        <div class="chartbox" id="chartBox">
-          <div class="cap">
-            <span data-i18n="chart.conf.title">置信度追踪</span>
-            <span class="lgd">
-              <span><i style="background:var(--green)"></i><span data-i18n="log.roleLife">生之执</span></span>
-              <span><i style="background:var(--red)"></i><span data-i18n="log.roleDeath">死之执</span></span>
-            </span>
-          </div>
-          <canvas id="chart"></canvas>
-        </div>
+        <div class="confbox" id="chartBox"><canvas id="chart"></canvas></div>
       </div>
+      <!-- 读数分两栏：左 = 生之执、右 = 死之执（用户 2026-09-21 定）。
+           单人模式下只有生之执，那一栏独占整行（见 main.ts 的 renderDecision） -->
       <div id="decision" class="prows"><div class="idle" data-i18n="decision.idle">尚未开始</div></div>
     </div>
   </aside>

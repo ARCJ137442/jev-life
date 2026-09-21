@@ -121,7 +121,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "decision.title": "本回合决策",
     "decision.idle": "尚未开始",
     "decision.restored": "已恢复上一局（第 {n} 回合）",
-    "decision.top5": "概率前 5",
     "decision.flip": "翻 ({row}, {col})",
 
     /* ---------- 游戏抽屉 ---------- */
@@ -543,7 +542,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "decision.title": "This turn's decisions",
     "decision.idle": "Not started yet",
     "decision.restored": "Restored from the previous game (turn {n})",
-    "decision.top5": "Top 5 probabilities",
     "decision.flip": "flip ({row}, {col})",
 
     /* ---------- Game drawer ---------- */
