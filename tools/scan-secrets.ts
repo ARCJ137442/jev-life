@@ -11,6 +11,12 @@
  * 用 Node 直接跑（Node 22+ 原生支持 TypeScript）：
  *   node tools/scan-secrets.ts            # 扫工作区
  *   node tools/scan-secrets.ts --history  # 连 git 历史一起扫
+ *
+ * ⚠ 与 jev-2048 的唯一一处偏离（T2 记录）：删掉了一个从未被调用的
+ * `readRaw()` 辅助函数。它在那里也是死代码 —— 两边都没有 tsconfig 覆盖
+ * tools/，所以从没被类型检查照到过。本仓库 T2 起把 tools/ 纳入了
+ * tsconfig.tools.json，noUnusedLocals 立刻把它报了出来。
+ * 其余内容逐字照搬，**所有注释原样保留**。
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { inflateSync } from "node:zlib";
@@ -57,11 +63,6 @@ interface Hit {
   where: string;
   pattern: string;
   sample: string;
-}
-
-/** 按**字节**读文件，再用 latin1 解码 —— 保证任何字节都不会丢失或被跳过 */
-function readRaw(path: string): string {
-  return readFileSync(path).toString("latin1");
 }
 
 /**

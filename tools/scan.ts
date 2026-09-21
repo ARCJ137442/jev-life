@@ -13,6 +13,31 @@
  * 判据是**传递闭包**，不是逐文件看 import：core/a → shared/b → client/c
  * 同样会让无头环境崩，而单看 core/a 的源码完全看不出来。
  *
+ * ═══ 一次真实的 fail-open，以及它的一般形态 ═══
+ *
+ * 这个检查的第一版是「先把 import 解析成磁盘上的 .ts，解析不到就跳过，
+ * 解析到了再判路径」。于是：
+ *
+ *   src/core/x.ts 里 `import { t } from "../client/api.js"`
+ *     client/api.ts 已存在 → 判违规 ✓
+ *     client/api.ts 还没建 → 静默放行 ✗
+ *
+ * 同一个 import，两种结果 —— 差别只在「磁盘上此刻有没有这个文件」。
+ * 开发中先写 import 再补实现是常态，所以这条路径**是可达的**，不是理论风险。
+ *
+ * 一般形态：**判据依赖了目标的呈现形式，而不是目标本身指向哪里。**
+ * 于是前提一旦不满足，工具报的是「干净」而不是「没查」—— 这两者在输出上
+ * 长得一模一样，这是它危险的原因。
+ *
+ * jev-2048 那次密钥泄漏就是同一个形态：扫描器用 `grep -I` 判「这个文件是不是
+ * 二进制」，而真实密钥恰好混在带控制字节的文件里，于是它没被扫，工具却说
+ * 「干净」。项目里已经提炼过这条原则 —— **「找不到」不等于「没有」**。
+ *
+ * 所以现在两件事一起做：
+ *   1. 先按**路径**判分层（纯字符串运算，与目标是否存在无关）
+ *   2. 解析不到的 import 全部打印出来，明说它们**没有参与判定** ——
+ *      一条「没查」的检查必须说清自己在哪儿没查，否则「绿」就是假承诺
+ *
  * 直接跑 TypeScript（Node 22+ 原生支持）：
  *   node tools/scan.ts
  */
@@ -80,19 +105,28 @@ function relativeImports(src: string): string[] {
 }
 
 /**
- * 把 import 说明符解析成磁盘上的 .ts 文件。
+ * 说明符**本该落在**的路径候选 —— 纯路径运算，完全不看磁盘。
  *
- * 源码里写的是 `.js`（NodeNext 与浏览器原生 ESM 都要求），磁盘上是 `.ts` ——
- * 这个映射是 Node 的 type-stripping 约定，不是笔误。
+ * 这是本次修掉的那个 fail-open 的关键：判分层只能用它，不能用「解析到的
+ * 真实文件」。前者描述的是「这个 import 指向哪里」，与文件建没建无关。
+ *
+ * 三个候选对应三种解析约定：
+ *   `./x.js` → 磁盘上的 `x.ts`（Node 的 type-stripping 约定，不是笔误）
+ *   `./x`    → 磁盘上的 `x.ts`
+ *   `./dir`  → 磁盘上的 `dir/index.ts`
  */
-function resolveSpecifier(fromFile: string, spec: string): string | null {
+function intendedPaths(fromFile: string, spec: string): string[] {
   const base = resolve(dirname(fromFile), spec);
-  const candidates = [
+  return [
     base.replace(/\.js$/, ".ts"),
     `${base}.ts`,
     join(base, "index.ts"),
   ];
-  for (const c of candidates) {
+}
+
+/** 解析成磁盘上真实存在的 .ts；没有就返回 null（调用方必须处理这个 null） */
+function resolveSpecifier(fromFile: string, spec: string): string | null {
+  for (const c of intendedPaths(fromFile, spec)) {
     try {
       if (statSync(c).isFile()) return c;
     } catch {
@@ -108,7 +142,8 @@ const isForbidden = (f: string): boolean => !relative(FORBIDDEN_DIR, f).startsWi
 /* ---------- 主流程 ---------- */
 
 const entries = listSources(CORE_DIR);
-const violations: { chain: string[] }[] = [];
+const violations: { chain: string[]; exists: boolean }[] = [];
+const unresolved: { from: string; spec: string }[] = [];
 
 // 每个被访问的文件记下「它是从哪来的」，命中时才能打印完整 import 链 ——
 // 只报「core/x.ts 引了 client」而不给路径，排查者还得自己走一遍闭包。
@@ -119,6 +154,17 @@ for (const e of entries) {
   queue.push(e);
 }
 
+/** 从某个文件回溯到 core 入口，得到「谁引了谁」的完整链 */
+function chainTo(file: string): string[] {
+  const out: string[] = [];
+  let cur: string | null | undefined = file;
+  while (cur) {
+    out.unshift(relative(ROOT, cur));
+    cur = origin.get(cur) ?? null;
+  }
+  return out;
+}
+
 while (queue.length) {
   const file = queue.shift()!;
   let src: string;
@@ -127,19 +173,24 @@ while (queue.length) {
   } catch {
     continue;
   }
-  for (const spec of relativeImports(src)) {
-    const target = resolveSpecifier(file, spec);
-    if (!target) continue;   // 解析不到就交给 tsc 报，这里不重复报同一个错
 
-    if (isForbidden(target)) {
-      // 从 file 回溯到某个 core 入口，得到完整链路
-      const chain: string[] = [target];
-      let cur: string | null | undefined = file;
-      while (cur) {
-        chain.unshift(cur);
-        cur = origin.get(cur) ?? null;
-      }
-      violations.push({ chain: chain.map((p) => relative(ROOT, p)) });
+  for (const spec of relativeImports(src)) {
+    // ① 先按路径判 —— 与目标文件建没建出来无关。
+    //    这一步必须在解析之前：解析失败恰恰是最需要判违规的场景。
+    const bad = intendedPaths(file, spec).find(isForbidden);
+    if (bad) {
+      violations.push({
+        chain: [...chainTo(file), relative(ROOT, bad)],
+        exists: resolveSpecifier(file, spec) !== null,
+      });
+      continue;
+    }
+
+    // ② 再解析。解析不到不判失败（可能引的是还没建的同层文件，或非 .ts 资源），
+    //    但**必须记账** —— 这些 import 没有参与分层判定，报告里要说明白。
+    const target = resolveSpecifier(file, spec);
+    if (!target) {
+      unresolved.push({ from: relative(ROOT, file), spec });
       continue;
     }
 
@@ -149,20 +200,31 @@ while (queue.length) {
   }
 }
 
+const reportUnresolved = (): void => {
+  if (unresolved.length === 0) return;
+  console.log(`\n  ⚠ 有 ${unresolved.length} 条 import 没有解析到文件，未参与分层判定：`);
+  for (const u of unresolved) console.log(`      ${u.from} → "${u.spec}"`);
+  console.log("    这些路径指向哪里无从确认，所以「绿」在这里不代表已经查过。");
+};
+
 console.log(`\n  分层检查：core/ 入口 ${entries.length} 个，可达文件 ${origin.size} 个`);
 
 if (violations.length) {
   console.error(`\n  ✗ 有 ${violations.length} 条路径从 core/ 通到了 client/：\n`);
   for (const v of violations) {
     // 箭头方向 = import 方向，链子读起来就是「谁引了谁」
-    console.error(`      ${v.chain.join("\n        → ")}`);
+    const tail = v.exists ? "" : "   （该文件尚不存在，但 import 已经指向这里）";
+    console.error(`      ${v.chain.join("\n        → ")}${tail}`);
     console.error("");
   }
   console.error(
     `\n    core/ 要在无 DOM、无网络的 Node 里跑（tools/bench.ts 依赖这一点）。\n` +
       `    引到 client/ 的模块会在运行时崩，而报错点离真正的原因很远。\n`,
   );
+  reportUnresolved();
   process.exit(1);
 }
 
-console.log("  ✓ core/ 的传递闭包没有触及 client/\n");
+console.log("  ✓ core/ 的传递闭包没有触及 client/");
+reportUnresolved();
+console.log("");

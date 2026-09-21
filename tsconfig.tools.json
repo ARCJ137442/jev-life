@@ -1,0 +1,20 @@
+{
+  // 构建期脚本的类型检查。
+  //
+  // 为什么需要它：Node 的 type-stripping 只把类型**擦掉**，不做任何校验 ——
+  // `node tools/*.ts` 能跑通不代表它有类型。在这个配置存在之前，tools/ 下的
+  // 四个脚本从未被任何 tsconfig 覆盖过，加进来当场就报出了一处死代码。
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": ["tools/**/*.ts"],
+  // seal-key.ts 是唯一一个排除项，而且是被迫的：它 import 的
+  // `../src/server/seal.ts` 要到 T12 才建立。这不是「它没问题所以跳过」，
+  // 是「它现在根本检查不了」—— T12 建出 seal.ts 之后必须删掉这行。
+  "exclude": ["tools/seal-key.ts"]
+}
