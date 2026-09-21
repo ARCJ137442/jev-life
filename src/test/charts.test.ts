@@ -420,7 +420,7 @@ function momentumSeries(): number[] {
   return [0.22, 0.31, 0.44, 0.52, 0.61, 0.48, 0.35, 0.2, 0.09, 0.04, 0.01];
 }
 
-test("生死态势图：三条界限线都画了，越界时线头带计数的圆点", () => {
+test("生死态势图：两条界限线都画了（没有中线），越界时线头带计数的圆点", () => {
   const { canvas, ctx } = fakeCanvas();
   const c = new MomentumChart(canvas, PALETTE);
   c.resize(240, 96);
@@ -429,12 +429,15 @@ test("生死态势图：三条界限线都画了，越界时线头带计数的�
   // 两条界限线用各自角色的颜色，中线是中性色 —— 颜色是这张图唯一的图例
   assert.ok(ctx.strokes.includes(PALETTE.life), "没有画生之执界限");
   assert.ok(ctx.strokes.includes(PALETTE.death), "没有画死之执界限");
-  // 阈值标签是**整数百分比**（用户 2026-09-21 定）：60% / 50% / 5%。
-  // 早先标的是 0.60 / 0.50 / 0.05 —— 那个「0.」是纯冗余，而这条线的语义
-  // 本来就是「活细胞占几成」
+  // 阈值标签是**整数百分比**（用户 2026-09-21 定）：60% / 5%。
+  // 早先标的是 0.60 / 0.05 —— 那个「0.」是纯冗余，而这条线的语义本来就是
+  // 「活细胞占几成」
   assert.ok(ctx.texts.includes("60%"), `没有标出生之执界限：${ctx.texts.join(",")}`);
-  assert.ok(ctx.texts.includes("50%"), `没有标出中线：${ctx.texts.join(",")}`);
   assert.ok(ctx.texts.includes("5%"), "没有标出死之执界限");
+  // ★ 0.5 中线已删（用户 2026-09-21 定）：折线成了国界线之后，它不再决定
+  // 填色也不再决定任何读数，而 0.5 在这个博弈里没有任何特殊含义 ——
+  // 两条胜负线是 0.30 与 0.05，都不在中间
+  assert.ok(!ctx.texts.includes("50%"), `还在画 0.5 中线：${ctx.texts.join(",")}`);
   assert.ok(
     !ctx.texts.some((x) => /^\d+\.\d+$/.test(x)),
     `图上还有小数形式的标签：${ctx.texts.join(",")}`,

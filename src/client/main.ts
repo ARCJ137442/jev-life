@@ -38,7 +38,7 @@ import type { Board, Cell, GameRules, Role, Termination } from "../core/types.js
 import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
 import type { Questions } from "../shared/types.js";
 import { JevError } from "../shared/backend.js";
-import type { DecisionRequest, DecisionResult } from "../shared/backend.js";
+import type { DecisionRequest, DecisionResult, LlmCallOptions } from "../shared/backend.js";
 import {
   BACKENDS,
   createBackend,
@@ -59,7 +59,10 @@ import {
   clampSize,
   clampStreak,
   clampTurnLimit,
+  coupleLlmSettings,
   defaultRole,
+  desiredEffort,
+  effortDegraded,
   isPresetSize,
   load,
   presetFor,
@@ -444,11 +447,13 @@ function fitBoard(): void {
  * 记分板折行（2048 那条教训）。
  */
 /**
- * 生死态势图的**总**高度：48 = 原来 96 的一半（用户实测后定，见 ui-spec 第四节）。
- * 理由是侧栏纵向空间稀缺，腾出来的留给要读的文本。「一半」指的是这个**盒子**的
- * 高度，绘图区比这个数小 —— 上下内边距另算（`chart.ts` 的 `MOM_PAD_Y`）。
+ * 生死态势图的高度。
+ *
+ * 曾经压到 48（「侧栏纵向空间稀缺」），后来 ① 并到 ③ 右边腾出了整张卡的高度，
+ * 用户随即要求**恢复成两倍**（2026-09-21）—— 这一相本来就该看清楚「谁在推、
+ * 谁在退」，压扁了那条折线就只剩一个趋势。
  */
-const MOM_H = 48;
+const MOM_H = 96;
 
 /**
  * 置信度图的兜底高度。
@@ -811,6 +816,11 @@ async function doTurn(): Promise<void> {
         model: settings.model,
         state: buildState(input),
         questions: buildQuestions(channel, input) as Questions,
+        // 非 LLM 后端这里整个字段不出现（见 llmCallOf）
+        ...(() => {
+          const llm = llmCallOf(role);
+          return llm === undefined ? {} : { llm };
+        })(),
       },
     };
   });
@@ -2150,6 +2160,62 @@ function applyBackendGating(provider: BackendId): void {
   }
 }
 
+/**
+ * LLM 四个控件 → 请求体上的 `llm` 字段。
+ *
+ * **非 LLM 后端返回 `undefined`**（整个字段不出现）：Jev 协议的后端不认识它，
+ * 而发一个没人看的字段等于给上游送一个未知参数。
+ *
+ * 这里送的是**期望值**，不是最终下发的值 —— 收敛在服务端按上游能力表做。
+ * 见 `shared/backend.ts` 的 `LlmCallOptions` 与 `llm-broker` 的 `clampEffort`。
+ */
+function llmCallOf(role: Role): LlmCallOptions | undefined {
+  const s = store.roles[role];
+  if (!BACKENDS[s.provider].isLlm) return undefined;
+  return { effort: desiredEffort(s) };
+}
+
+/**
+ * LLM 那一块的可见性、取值与两条提示。
+ *
+ * 三条必须同屏出现，缺一条都会让人做出错的判断：
+ *   1. 只有在 LLM 后端上才有意义 —— 否则是一排点了没反应的死控件
+ *   2. 思考强度的实测警示 —— 四个显式档位全部劣于不设，不说就等于骗
+ *   3. 「该后端不支持，已降级为默认」—— 能力的收敛在服务端做，而用户要在
+ *      点下去**之前**知道这一档在这条后端上等于没设
+ */
+function syncLlmUi(): void {
+  const s = store.roles[state.role];
+  const b = BACKENDS[s.provider];
+  $("llmCfg").style.display = b.isLlm ? "" : "none";
+  if (!b.isLlm) return;
+
+  $<HTMLInputElement>("inpCot").checked = s.chainOfThought;
+  $<HTMLSelectElement>("inpAllowThink").value = s.allowThinking;
+  $<HTMLSelectElement>("inpEffort").value = s.effort;
+  // 「是否允许思考 = 否」时强度置灰：两者都落到 none，让用户去拨一个
+  // 已经不生效的下拉框是误导
+  $<HTMLSelectElement>("inpEffort").disabled = s.allowThinking === "no";
+  $<HTMLSelectElement>("inpCallPolicy").value = s.callPolicy;
+
+  const upstream = b.llmUpstream ?? "";
+  const degraded = effortDegraded(s, upstream);
+  const note = $("effortNote");
+  note.textContent = degraded ? t("api.effortDegraded") : "";
+  note.style.display = degraded ? "" : "none";
+
+  // 实测警示**始终**显示（而不是只在选了档位时才出现）：它是「默认留空」
+  // 这个默认值的理由，不写出来读者只会以为留空是个随便定的出厂值
+  $("effortWarn").style.display = "block";
+}
+
+/** 三个思考控件改完之后走同一条路：先对齐耦合，再存盘重画 */
+function commitLlmSettings(changed: "cot" | "allow" | "effort"): void {
+  store.roles[state.role] = coupleLlmSettings(store.roles[state.role], changed);
+  save(store);
+  syncLlmUi();
+}
+
 /** 打开抽屉 / 切玩家时：填**当前生效的配置**，而不是后端默认值 */
 function syncApiUi(): void {
   const s = store.roles[state.role];
@@ -2169,6 +2235,7 @@ function syncApiUi(): void {
     store.api.retryMax === null ? "inf" : String(store.api.retryMax);
   $<HTMLInputElement>("inpRetryBase").value = String(store.api.retryBaseMs);
   $("retryPreview").textContent = previewBackoff(store.api.retryMax, store.api.retryBaseMs);
+  syncLlmUi();
 }
 
 function previewBackoff(max: number | null, base: number): string {
@@ -2189,6 +2256,7 @@ function onBackendSwitch(): void {
   $<HTMLInputElement>("inpModel").value = "";
   $<HTMLInputElement>("inpModel").placeholder = b.managed ? t("backend.modelManaged") : b.model;
   applyBackendGating(provider);
+  syncLlmUi();
 }
 
 /**
@@ -2659,6 +2727,18 @@ function bindControls(): void {
     void copyText(fmtJson(all), e.currentTarget as HTMLButtonElement);
   };
 
+  /* LLM 调用配置。三个思考控件走同一条「先对齐耦合再存盘」的路；
+     调用策略只影响服务端怎么问，没有耦合，直接写回 */
+  $("inpCot").addEventListener("change", () => commitLlmSettings("cot"));
+  $("inpAllowThink").addEventListener("change", () => commitLlmSettings("allow"));
+  $("inpEffort").addEventListener("change", () => commitLlmSettings("effort"));
+  $("inpCallPolicy").addEventListener("change", () => {
+    const s = store.roles[state.role];
+    s.callPolicy = $<HTMLSelectElement>("inpCallPolicy").value === "tool" ? "tool" : "json";
+    save(store);
+    syncLlmUi();
+  });
+
   selBackend.onchange = onBackendSwitch;
   $("bApiSave").onclick = () => {
     commitApiSettings();
@@ -2713,6 +2793,7 @@ function boot(): void {
     "inpThreshold", "thresholdVal", "inpChannel", "bStrategySync", "bStrategyReset", "bStrategyDone",
     "selBackend", "inpKey", "keyHint", "inpBase", "inpModel", "advancedApi", "modelHint", "backendNote",
     "inpRetryMax", "inpRetryBase", "retryPreview", "bApiSync", "bApiReset", "bApiSave", "bApiClose",
+    "llmCfg", "inpCot", "inpAllowThink", "inpEffort", "effortWarn", "effortNote", "inpCallPolicy",
     "logList", "logCount", "bCopyAll", "bLogClear", "bLogDone",
     "bExpGame", "bImpGame", "bExpStrategy", "bImpStrategy", "bExpApi", "bImpApi",
     "bExpLog", "bExpAll", "bArchiveWipe", "bArchiveDone",

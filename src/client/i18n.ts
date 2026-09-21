@@ -113,7 +113,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "chart.conf.note": "带宽 = 这一手概率分布有多分散；中线 = 中位概率",
     "chart.mom.title": "生死态势",
     "chart.mom.waiting": "等待对局数据",
-    "chart.mom.note": "纵轴是活细胞占比 0→1；绿虚线 = 生之执界限，红虚线 = 死之执界限",
+    "chart.mom.note":
+      "纵轴是活细胞占比 0→100%；绿虚线 = 生之执获胜线，红虚线 = 死之执获胜线。折线以下填绿（活细胞份额）、以上填红（死细胞份额）—— 绿区变大就是生之执在赢",
     "chart.heat.title": "本回合决策热力图",
     "chart.heat.waiting": "等待本回合决策",
 
@@ -273,6 +274,35 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.currentTitle": "当前后端：{label} · {model}",
     "backend.currentTitleShort": "当前后端：{label}",
     "backend.remoteSuffix": "{label}（远端）",
+
+    /* ---------- LLM 调用配置（只在选用 LLM 后端时出现）---------- */
+    "api.llmTitle": "LLM 调用配置",
+    "api.llmNote": "只对这一条后端生效；换回别的后端时设置仍然留着。",
+    "api.cot": "思维链",
+    "api.cotDesc":
+      "默认关。实测两个后端都从 0–63% 升到 100%，快 5–40 倍，推理 token 归零 —— 关掉它从结构上消灭了「推理吃光预算」这个失败模式（观察到的唯一失败原因）。",
+    "api.allowThink": "是否允许思考",
+    "api.allowEmpty": "留空（不说）",
+    "api.allowYes": "是",
+    "api.allowNo": "否",
+    "api.effort": "思考强度",
+    "api.effortEmpty": "默认（留空）",
+    "api.effortNone": "无 none",
+    "api.effortLow": "低 low",
+    "api.effortMedium": "中 medium",
+    "api.effortHigh": "高 high",
+    "api.effortXhigh": "超高 xhigh",
+    "api.effortMax": "最强 max",
+    "api.effortWarn":
+      "实测：显式设置本项会显著降低成功率（3/3 → 0–1/3）。默认留空。",
+    "api.effortDegraded":
+      "⚠ 该后端不支持这一档，已降级为默认（不下发这个字段）。直接发出去会把整个决策请求打成 400。",
+    "api.callPolicy": "调用策略",
+    "api.policyJson": "JSON 输出",
+    "api.policyTool": "工具循环",
+    "api.callPolicyNote":
+      "JSON 靠提示词约束形状、一次调用（实测快 2–4 倍）；工具循环靠 schema 强制形状、可多轮。两条都留着是因为**它本身就是可对照的变量**。",
+    "api.effortCoupling": "「否」与 `none` 是同一件事的两种说法，界面会自动保持一致。",
 
     /* ---------- 页脚与状态 ---------- */
     "stats.total": "累计",
@@ -694,6 +724,35 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.currentTitle": "Current backend: {label} · {model}",
     "backend.currentTitleShort": "Current backend: {label}",
     "backend.remoteSuffix": "{label} (remote)",
+
+    /* ---------- LLM call settings (only shown for an LLM backend) ---------- */
+    "api.llmTitle": "LLM call settings",
+    "api.llmNote": "These apply to this backend only; the values stay put when you switch away.",
+    "api.cot": "Chain of thought",
+    "api.cotDesc":
+      "Off by default. Measured on two backends: success went from 0–63% to 100%, 5–40× faster, reasoning tokens to zero — turning it off structurally removes the “reasoning eats the whole budget” failure mode, the only one we ever observed.",
+    "api.allowThink": "Allow thinking",
+    "api.allowEmpty": "Leave empty (say nothing)",
+    "api.allowYes": "Yes",
+    "api.allowNo": "No",
+    "api.effort": "Thinking effort",
+    "api.effortEmpty": "Default (empty)",
+    "api.effortNone": "None",
+    "api.effortLow": "Low",
+    "api.effortMedium": "Medium",
+    "api.effortHigh": "High",
+    "api.effortXhigh": "Extra high (xhigh)",
+    "api.effortMax": "Max",
+    "api.effortWarn":
+      "Measured: setting this explicitly drops the success rate sharply (3/3 → 0–1/3). Leave it empty.",
+    "api.effortDegraded":
+      "⚠ This backend does not accept that value, so it is dropped (the field is not sent). Sending it anyway would 400 the whole decision request.",
+    "api.callPolicy": "Call policy",
+    "api.policyJson": "JSON output",
+    "api.policyTool": "Tool loop",
+    "api.callPolicyNote":
+      "JSON constrains the shape through the prompt in a single call (measured 2–4× faster); the tool loop enforces it with a schema and can take several rounds. Both are kept because the difference is itself a variable worth comparing.",
+    "api.effortCoupling": "“No” and `none` are two ways of saying the same thing; the UI keeps them in step.",
 
     /* ---------- Footer and status ---------- */
     "stats.total": "Total",
