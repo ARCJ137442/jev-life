@@ -51,6 +51,7 @@ import {
   MAX_RETRY,
   channelOf,
   clamp01,
+  clampFlipMs,
   clampPace,
   clampTurnLimit,
   defaultRole,
@@ -61,8 +62,16 @@ import {
   type Persisted,
   type RoleSettings,
 } from "./config.js";
-import { ConfidenceChart, fitCanvas } from "./chart.js";
-import type { ChartPoint, ChartSeries } from "./chart.js";
+import {
+  ConfidenceChart,
+  HeatChart,
+  MomentumChart,
+  ROLE_COLOR,
+  buildHeat,
+  withAlpha,
+} from "./chart.js";
+import type { ChartPoint, ChartSeries, MomentumInput } from "./chart.js";
+import { BoardRenderer, FLIP_MS } from "./render.js";
 import { deserializeTurn, serializeTurn, type StoredTurn } from "./session.js";
 import {
   clearSession,
@@ -96,19 +105,23 @@ import type { Opening } from "../core/presets.js";
  * 配色不是审美选择：**绿、红、黄、白四个色相已经被「内容」占用**
  * （绿=生之执、红=死之执、黄=中段/交集、白=活细胞），所以界面主题色只能落在
  * 青/蓝/紫一带，用户选了青。角色色本身**不随主题走** —— 它们是数据的一部分。
+ *
+ * `band` / `faint` 由 `color` 现算而不是各写一份字面量：它们本来就是同一个色
+ * 的两种透明度，写成字面量的话，改主色时漏改一处就会出现「带子与中位线不同色」，
+ * 而那看起来像是渲染出错。
  */
 const ROLE_META: Record<Role, { labelKey: string; color: string; band: string; faint: string }> = {
   life: {
     labelKey: "log.roleLife",
-    color: "#4ade80",
-    band: "rgba(74,222,128,.30)",
-    faint: "rgba(74,222,128,.05)",
+    color: ROLE_COLOR.life,
+    band: withAlpha(ROLE_COLOR.life, 0.3),
+    faint: withAlpha(ROLE_COLOR.life, 0.05),
   },
   death: {
     labelKey: "log.roleDeath",
-    color: "#f87171",
-    band: "rgba(248,113,113,.30)",
-    faint: "rgba(248,113,113,.05)",
+    color: ROLE_COLOR.death,
+    band: withAlpha(ROLE_COLOR.death, 0.3),
+    faint: withAlpha(ROLE_COLOR.death, 0.05),
   },
 };
 
@@ -167,7 +180,10 @@ function assertDom(ids: string[]): void {
 const store: Persisted = load();
 
 const boardCanvas = $<HTMLCanvasElement>("board");
+const renderer = new BoardRenderer(boardCanvas, ROLE_COLOR);
 const chart = new ConfidenceChart($<HTMLCanvasElement>("chart"));
+const momentum = new MomentumChart($<HTMLCanvasElement>("momentum"), ROLE_COLOR);
+const heat = new HeatChart($<HTMLCanvasElement>("heat"), ROLE_COLOR);
 
 /* ═══════════ 状态 ═══════════ */
 
@@ -216,6 +232,16 @@ interface AppState {
   shown: ShownDecision[] | null;
   shownIdleKey: string;
   shownIdleParams?: Record<string, string | number>;
+  /**
+   * 本回合双方各自的**完整**概率分布 —— 决策热力图（③）的数据源。
+   *
+   * 与日志分开存：日志里只有 top / bottom / median 三个标量与概率前 5，
+   * 那是给「这一手有多分散」用的；热力图要的是**每一格**的值。
+   *
+   * **只在内存里**，不进存档：热力图说的是「这一手」，刷新之后那个「这一手」
+   * 已经不存在了，恢复出一张上一局的热力图只会误导人。
+   */
+  probs: Record<Role, CellProbabilities | null>;
 }
 
 /** `TurnRecord` 的形状。core 那侧的 `TurnRecord` 走 import type，这里只借它的结构 */
@@ -245,6 +271,7 @@ const state: AppState = {
   role: "life",
   shown: null,
   shownIdleKey: "decision.idle",
+  probs: { life: null, death: null },
 };
 
 const ledEl = $("led");
@@ -367,13 +394,15 @@ function updateCostUi(): void {
  * 棋盘画布取「可用宽 / 可用高」的较小者 —— 生命棋的棋盘是正方形，
  * 用长边会让它在窄屏上被裁掉。
  *
- * T14 只负责尺寸（见文件头）。真正的绘制在 T15 的 `render.ts`。
+ * 尺寸与绘制现在是同一件事：格子的边长只有在画布尺寸定下来之后才算得出，
+ * 所以这里直接把可用空间交给渲染器，由它按 `GUTTER_K` 反推格子边长。
+ * 棋盘尺寸也一并传进去 —— 渲染器不持有棋盘状态（它只认视觉）。
  */
 function fitBoard(): void {
   const box = boardCanvas.parentElement;
   if (!box) return;
   const size = Math.min(box.clientWidth, box.clientHeight);
-  fitCanvas(boardCanvas, size, size);
+  renderer.resize(size, size, state.board.cols, state.board.rows);
 }
 
 /**
@@ -381,7 +410,7 @@ function fitBoard(): void {
  *
  * 三张图**高度固定、宽度跟着侧栏走**：它们的信息量都在横轴（回合）上，
  * 而侧栏本身是 `max-content` 撑出来的 —— 让图去挤压侧栏宽度会反过来让
- * 记分板折行（2048 那条教训）。两张占位画布只做尺寸，绘制归 T15。
+ * 记分板折行（2048 那条教训）。
  */
 const CONF_H = 92;
 const MOM_H = 96;
@@ -392,17 +421,13 @@ function fitCharts(): void {
   chart.resize(Math.max(0, confBox.clientWidth - 16), CONF_H);
 
   const momBox = $("momentumBox");
-  fitCanvas(
-    $<HTMLCanvasElement>("momentum"),
-    Math.max(0, momBox.clientWidth - 16),
-    MOM_H,
-  );
+  momentum.resize(Math.max(0, momBox.clientWidth - 16), MOM_H);
 
   // ③ 与棋盘同形：正方形，边长取「容器宽」与「高度上限」的较小者。
   // 16×16 时它是 16 格的网格，边长太小会糊成一片；太大又挤掉上面两张图
   const heatBox = $("heatBox");
   const side = Math.min(Math.max(0, heatBox.clientWidth - 2), HEAT_MAX);
-  fitCanvas($<HTMLCanvasElement>("heat"), side, side);
+  heat.resize(side, side);
 }
 
 new ResizeObserver(() => {
@@ -420,8 +445,7 @@ window.addEventListener("orientationchange", () =>
 
 /**
  * ①②③ 的分工（别混）：① 是**模型的**时间序列，② 是**游戏的**时间序列，
- * ③ 是**当回合**的空间分布。这里只产 ① 的数据；② 的数据在 `state.ratioHistory`
- * 里、③ 的在 `state.lastProbs` 里，都留给 T15。
+ * ③ 是**当回合**的空间分布。
  */
 function chartSeries(): ChartSeries[] {
   const out: ChartSeries[] = [];
@@ -442,6 +466,35 @@ function chartSeries(): ChartSeries[] {
     });
   }
   return out;
+}
+
+/**
+ * ② 的数据：活细胞占比的序列。
+ *
+ * 索引 0 = 开局，索引 i = 第 i 回合演化之后。`ratioHistory` 里存的是**每一回合
+ * 开始时**的占比，所以「历史 + 当前局面」拼起来正好是这条序列 —— 与
+ * `classifyTermination` 用的是同一条（它也是这么拼的）。图上的越界计数因此与
+ * 判负用的防抖计数是同一个数，不会出现「图上连续 3 轮越界、却还没判胜」。
+ */
+function momentumInput(): MomentumInput {
+  return {
+    ratios: [...state.ratioHistory, ratioOf(aliveCount(state.board))],
+    rules: currentRules(),
+  };
+}
+
+/**
+ * 三张图的数据一起刷新。
+ *
+ * 放在一个函数里是因为它们的**数据源同批更新**（一回合结束时棋盘、占比、分布
+ * 全变了），分开写迟早会漏掉一张 —— 而漏掉的那张会停在上一回合，看起来
+ * 像「模型这一手没给分布」。
+ */
+function refreshCharts(): void {
+  chart.setData(chartSeries());
+  momentum.setData(momentumInput());
+  if (state.probs.life || state.probs.death) heat.setData(buildHeat(state.board, state.probs));
+  else heat.clear();
 }
 
 /* ═══════════ 决策面板 ═══════════ */
@@ -816,8 +869,11 @@ async function doTurn(): Promise<void> {
   const before = aliveCount(board);
   state.ratioHistory.push(ratioOf(before));
 
-  // 引擎是纯函数：flip 返回新棋盘，不会改动传进去的那个
-  const next = lifeStep(flip(flip(board, lifeFlip), deathFlip), topology);
+  // 引擎是纯函数：flip 返回新棋盘，不会改动传进去的那个。
+  // 中间那副（落完子、还没演化）要留下来 —— 棋盘动画的两相就是按它切的：
+  // 落子相画「谁翻了哪一格」，演化相画「翻完之后长成什么样」
+  const mid = flip(flip(board, lifeFlip), deathFlip);
+  const next = lifeStep(mid, topology);
   const after = aliveCount(next);
   const netGrowth = after - before;
 
@@ -847,6 +903,24 @@ async function doTurn(): Promise<void> {
   state.seen.add(boardKey(state.board));
   state.aliveMax = Math.max(state.aliveMax, after);
   state.aliveMin = Math.min(state.aliveMin, after);
+
+  /* ── 把这一回合交给棋盘动画 ──
+     两段动画（落子 → 演化）的时间线由渲染器自己排，这里只说「翻了哪两格」。
+     粒子也跟着落子走，在渲染器内部生成 —— 撒在哪里是画面的事。 */
+
+  renderer.playTurn({
+    mid,
+    after: next,
+    flips: [
+      { cell: lifeFlip, role: "life" },
+      { cell: deathFlip, role: "death" },
+    ],
+  });
+
+  /* ── 本回合的分布，供热力图（③）用 ── */
+
+  state.probs = { life: null, death: null };
+  for (let i = 0; i < attempts.length; i++) state.probs[attempts[i].role] = outcomes[i].probs;
 
   /* ── 记账 ── */
 
@@ -942,7 +1016,7 @@ function roleLogOf(
 function pushLog(row: TurnLog): void {
   state.logs.push(row);
   if (state.logs.length > MAX_LOGS) state.logs.shift();
-  chart.setData(chartSeries());
+  refreshCharts();
   renderLog();
   persist();
 }
@@ -1013,19 +1087,31 @@ function endGame(v: Termination): void {
 
 /* ═══════════ 控制 ═══════════ */
 
+/**
+ * 主按钮的三态。
+ *
+ * 「还没开始」与「暂停在中途」是**两件事**，用同一个「开始对弈」去标会让人
+ * 以为点下去要把当前这一局从头再来（尤其在一局已经走了几十手、或者刚恢复
+ * 完一份存档的时候）。判据是 `state.turn`：走出过回合，这一局就不再是新的了。
+ *
+ * 运行中显示的是**状态**（已开始）而不是动作（暂停）—— 这是刻意的：暂停这个
+ * 动作由 title 与高亮边框交代，而「现在到底在不在跑」是这一屏最需要一眼看到的事。
+ */
 function syncRunButton(): void {
   const b = $<HTMLButtonElement>("bToggle");
   if (state.running) {
-    b.textContent = t("ctrl.pause");
+    b.textContent = t("ctrl.started");
+    b.title = t("ctrl.startedTitle");
     b.classList.remove("primary");
     b.classList.add("running");
   } else {
-    b.textContent = t("ctrl.takeover");
+    const started = state.turn > 0;
+    b.textContent = t(started ? "ctrl.resume" : "ctrl.takeover");
+    b.title = t(started ? "ctrl.resumeTitle" : "ctrl.takeoverTitle");
     b.classList.remove("running");
     b.classList.add("primary");
   }
   b.disabled = state.finished;
-  b.title = t("ctrl.takeoverTitle");
 }
 
 function start(): void {
@@ -1092,8 +1178,15 @@ function newGame(): void {
   state.aliveMin = alive;
   state.costTotal = 0;
   state.costUnknown = false;
+  state.probs = { life: null, death: null };
 
+  // 棋盘直接落到开局（不走动画）：新局的第一帧应当是「初始局面」本身，
+  // 而不是一堆方块从零长出来的过程
+  renderer.setBoard(state.board);
+  // 三张图都回到「等待数据」——上一局的曲线留在屏幕上会与这一局混起来
   chart.clear();
+  momentum.clear();
+  heat.clear();
   showIdleDecision("decision.idle");
   renderLog();
   updateStats();
@@ -1126,6 +1219,9 @@ function applySession(s: Session): void {
   // 恢复出来的那一局不能自动跑起来 —— 刷新之后先让人看一眼再说
   state.running = false;
   state.busy = false;
+  // 分布不进存档（见 AppState.probs），所以热力图恢复不出来，只能回到「等待」。
+  // 另外两张图是历史的，照旧画得出来
+  state.probs = { life: null, death: null };
 
   state.costTotal = state.logs.reduce(
     (sum, row) => sum + (row.life?.costUsd ?? 0) + (row.death?.costUsd ?? 0),
@@ -1135,7 +1231,8 @@ function applySession(s: Session): void {
     (row) => (row.life && row.life.costUsd === null) || (row.death && row.death.costUsd === null),
   );
 
-  chart.setData(chartSeries());
+  renderer.setBoard(state.board);
+  refreshCharts();
   renderLog();
   updateStats();
   updateCostUi();
@@ -1474,6 +1571,15 @@ function syncGameUi(): void {
     }) +
     " " +
     (preset().calibrated ? "" : t("game.rulesUncalibrated"));
+
+  // 三个纯画面设置的**唯一**消费者（T14 里前两个没有任何消费者，只留了一句注释）。
+  // 接在这里而不是散到各处：改了设置之后 `applyDuelSettings` 必定回到这里，
+  // 于是「开关生效了吗」永远只有一个答案
+  renderer.animations = store.duel.animations;
+  renderer.particlesEnabled = store.duel.particles;
+  renderer.flipMs = store.duel.flipMs;
+  $<HTMLInputElement>("inpFlipMs").value = String(store.duel.flipMs);
+  $("flipMsVal").textContent = paceLabel(store.duel.flipMs);
 }
 
 function validateTurnLimit(): boolean {
@@ -1502,21 +1608,15 @@ function applyDuelSettings(restart: boolean): void {
   d.turnLimit = clampTurnLimit($<HTMLInputElement>("inpTurnLimit").value, d.turnLimit);
   d.animations = $<HTMLInputElement>("inpAnim").checked;
   d.particles = $<HTMLInputElement>("inpParticles").checked;
+  d.flipMs = clampFlipMs($<HTMLInputElement>("inpFlipMs").value);
   save(store);
   syncGameUi();
   if (restart) newGame();
 }
 
 /**
- * ⚠ T15 的接口（此处刻意只留注释，不留半截代码）：
- *
- * 动效开关（`store.duel.animations` / `particles`）目前**没有任何消费者** ——
- * T14 没有 `render.ts`。T15 接上渲染器时，要接的是
- * `syncGameUi()` 结尾处那一个位置（`renderer.animations = store.duel.animations`），
- * 而不是回头去找「哪个开关该喂给谁」。
- *
- * 不在这里先写一个空转的转发函数：一个没人读的变量会让「开关生效了吗」
- * 变成一个查不出来的问题。
+ * 动效开关（`store.duel.animations` / `particles`）的落点在 `syncGameUi()` 的
+ * 结尾 —— 那是 T14 就定好的位置，这里不再转发一次。
  */
 function bindGameSettings(): void {
   // 定义博弈的两项：改了就重开（理由见 applyDuelSettings）
@@ -1528,6 +1628,17 @@ function bindGameSettings(): void {
   for (const id of ["inpAnim", "inpParticles"]) {
     $(id).addEventListener("change", () => applyDuelSettings(false));
   }
+
+  // 时长滑块按 `input` 实时生效（与步进间隔那个同一种手感）—— 拖动时就能看见
+  // 左边那一相变慢，而不是松手之后才跳一下。代价是每次 input 都写一遍配置，
+  // 所以这里不走 `applyDuelSettings`（它会重画整个抽屉）
+  const flipSlider = $<HTMLInputElement>("inpFlipMs");
+  flipSlider.addEventListener("input", () => {
+    store.duel.flipMs = clampFlipMs(flipSlider.value);
+    $("flipMsVal").textContent = paceLabel(store.duel.flipMs);
+    renderer.flipMs = store.duel.flipMs;
+    save(store);
+  });
 }
 
 function resetDuelSettings(): void {
@@ -1538,6 +1649,7 @@ function resetDuelSettings(): void {
   store.duel.animations = true;
   store.duel.particles = true;
   store.duel.paceMs = 1200;
+  store.duel.flipMs = FLIP_MS;
   save(store);
   syncGameUi();
   syncPaceUi();
@@ -2049,7 +2161,13 @@ function relanguage(): void {
   syncPaceUi();
   syncRunButton();
   renderLog();
+  // 三块画布上的文案（「等待对局数据」等）是**绘制那一刻**写死的，切换语言后
+  // 不重绘就会一直停在旧语言。棋盘上没有文案，但它一样便宜 —— 一起重绘，
+  // 免得下次往棋盘上加字时漏掉这一处
+  renderer.redraw();
   chart.redraw();
+  momentum.redraw();
+  heat.redraw();
   $<HTMLButtonElement>("bResult").title = t("ctrl.resultTitle");
 }
 
@@ -2289,7 +2407,7 @@ function boot(): void {
     "bLang", "langLbl", "bGame", "bStrategy", "bApi", "bLog", "bArchive",
     "scrim", "dGame", "dStrategy", "dApi", "dLog", "dArchive", "toast", "fileInput",
     "sizeList", "inpTopology", "inpTurnLimit", "turnLimitWarn", "rulesNote",
-    "openingList", "inpAnim", "inpParticles", "bGameReset", "bGameDone",
+    "openingList", "inpAnim", "inpParticles", "inpFlipMs", "flipMsVal", "bGameReset", "bGameDone",
     "roleHint", "ruleNote", "hintText", "inpPredict", "inpDetect",
     "inpMemory", "memoryVal", "bMemMax", "inpStrategy", "thresholdRow",
     "inpThreshold", "thresholdVal", "inpChannel", "bStrategySync", "bStrategyReset", "bStrategyDone",

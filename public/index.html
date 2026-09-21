@@ -28,7 +28,7 @@
   --accent:#22d3ee; --accent-2:#67e8f9; --accent-soft:rgba(34,211,238,.14);
   --accent-ink:#04252b;                           /* 青底上的深色文字 */
   /* 角色色与内容色 —— 它们**不随主题走**，是数据的一部分 */
-  --green:#4ade80; --red:#f87171; --yellow:#fbbf24; --live:#fff;
+  --green:#22ff88; --red:#ff4d4d; --yellow:#fbbf24; --live:#fff;
   /* 字体：**刻意不引 webfont**（源仓库从 Google Fonts 取 Geist）。
      理由有三，按重要性排：① 少一个外部依赖，断网/内网也长得一样；
      ② 不向第三方发请求；③ 字体晚到会让首屏布局跳一下，而这个页面的
@@ -72,8 +72,8 @@ button.ghost{background:transparent}
 button.running{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 button.running:hover:not(:disabled){background:rgba(34,211,238,.22);color:var(--accent-2)}
 button.mini{padding:5px 10px;font-size:11.5px}
-button.danger{border-color:rgba(248,113,113,.45);color:var(--red)}
-button.danger:hover:not(:disabled){background:rgba(248,113,113,.12);border-color:var(--red);color:var(--red)}
+button.danger{border-color:rgba(255,77,77,.45);color:var(--red)}
+button.danger:hover:not(:disabled){background:rgba(255,77,77,.12);border-color:var(--red);color:var(--red)}
 
 /* ══ 主区 ══ */
 main{flex:1;min-height:0;display:grid;
@@ -218,8 +218,8 @@ textarea{resize:vertical}
 /* 玩家切换（生之执 / 死之执）—— 后端与上下文都是玩家级的 */
 .roletabs{display:flex;gap:6px;margin-bottom:12px}
 .roletab{flex:1}
-.roletab.on[data-role=life]{background:rgba(74,222,128,.16);border-color:var(--green);color:var(--green);font-weight:600}
-.roletab.on[data-role=death]{background:rgba(248,113,113,.16);border-color:var(--red);color:var(--red);font-weight:600}
+.roletab.on[data-role=life]{background:rgba(34,255,136,.16);border-color:var(--green);color:var(--green);font-weight:600}
+.roletab.on[data-role=death]{background:rgba(255,77,77,.16);border-color:var(--red);color:var(--red);font-weight:600}
 .syncrow{margin:18px 0 4px}
 .syncrow button{width:100%;white-space:normal;text-align:center;line-height:1.45;padding:9px 12px}
 
@@ -617,6 +617,18 @@ textarea{resize:vertical}
         <input type="checkbox" id="inpParticles" checked>
         <span class="track"></span><span class="txt" data-i18n="game.fxParticles">落子处的发光粒子</span>
       </label>
+
+      <!-- 落子相时长 = **整套动画的节奏**：演化在它之后才开始，粒子与选框的
+           存续时间也按同一个倍数走。默认 840ms（0.8s）是原值 420ms 的两倍 ——
+           用户实测一轮太快，看不清「谁在哪儿落了一子」。 -->
+      <div class="slider-row" style="margin-top:11px">
+        <span class="tinylbl" style="margin:0" data-i18n="game.flipMs">落子相时长</span>
+        <!-- 步长 20 而不是 100：出厂值 1680 必须**落在网格上**，否则浏览器会把
+             它吸附到最近的合法值，于是「恢复默认」与「刚装好」不是同一个数 -->
+        <input type="range" id="inpFlipMs" min="200" max="5000" step="20" value="1680" data-i18n-title="game.flipMsTitle">
+        <span class="val" id="flipMsVal">1.7s</span>
+      </div>
+      <div class="tinylbl" data-i18n="game.flipMsHint">落子动画、粒子与选框的存续时间；演化一代在它之后才开始。</div>
     </div>
 
     <div class="divider"></div>

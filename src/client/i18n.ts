@@ -76,8 +76,12 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- 棋盘下方控制条 ---------- */
     "ctrl.takeover": "▶ 开始对弈",
+    "ctrl.resume": "▶ 继续对弈",
+    "ctrl.started": "● 已开始",
     "ctrl.pause": "⏸ 暂停",
     "ctrl.takeoverTitle": "让双方 AI 自动对弈 / 暂停（空格）",
+    "ctrl.resumeTitle": "接着这一局往下走（空格）",
+    "ctrl.startedTitle": "对弈进行中 —— 点一下暂停（空格）",
     "ctrl.step": "单步",
     "ctrl.stepTitle": "只走一个回合（双方同时落子，再演化一代）",
     "ctrl.new": "↺ 重开",
@@ -137,6 +141,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.fx": "动效",
     "game.fxAnim": "落子与演化的缩放动画",
     "game.fxParticles": "落子处的发光粒子",
+    "game.flipMs": "落子相时长",
+    "game.flipMsTitle":
+      "「谁在哪儿落了一子」这一相演多久。演化一代在它之后才开始；粒子与选框的存续时间按同一个倍数走",
+    "game.flipMsHint": "落子动画、粒子与选框的存续时间；演化一代在它之后才开始。",
     "game.opening": "开局",
     "game.openingHint": "开局库按尺寸分级 —— 先定尺寸，再选开局。改动能立即重开一局。",
     "game.reset": "恢复默认",
@@ -464,8 +472,12 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- Controls under the board ---------- */
     "ctrl.takeover": "▶ Start the duel",
+    "ctrl.resume": "▶ Resume the duel",
+    "ctrl.started": "● In progress",
     "ctrl.pause": "⏸ Pause",
     "ctrl.takeoverTitle": "Let both AIs play automatically / pause (space)",
+    "ctrl.resumeTitle": "Carry on with this game (space)",
+    "ctrl.startedTitle": "The duel is running — click to pause (space)",
     "ctrl.step": "Step",
     "ctrl.stepTitle": "Play a single turn (both sides flip, then one evolution)",
     "ctrl.new": "↺ Restart",
@@ -525,6 +537,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.fx": "Effects",
     "game.fxAnim": "Scale animation for flips and evolutions",
     "game.fxParticles": "Glowing particles at the flipped cell",
+    "game.flipMs": "Flip phase",
+    "game.flipMsTitle":
+      "How long the “who flipped which cell” phase runs. The evolution phase starts after it; particle and ring lifetimes scale with it",
+    "game.flipMsHint": "Lifetime of the flip animation, particles and ring; the evolution starts after it.",
     "game.opening": "Opening",
     "game.openingHint": "The opening library is per size — pick the size first, then the opening. Changing it restarts the game immediately.",
     "game.reset": "Reset to defaults",

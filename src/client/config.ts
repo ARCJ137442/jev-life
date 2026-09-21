@@ -25,6 +25,10 @@ import type { Strategy } from "../core/decide.js";
 import type { BackendId } from "./api.js";
 import { BACKENDS } from "./api.js";
 import { detectLang, type Lang } from "./i18n.js";
+// 落子相时长的出厂值住在渲染器里（那里解释了它为什么是 840）——
+// 这里引用它而不是抄一个数字：抄一份的话，改了一处就会得到
+// 「恢复默认之后动画速度与刚装好时不一样」这种没人查得出来的差异
+import { FLIP_MS } from "./render.js";
 import { PRESETS } from "../core/presets.js";
 import type { SizePreset } from "../core/presets.js";
 
@@ -51,6 +55,15 @@ export interface DuelSettings {
   /** 落子处的发光粒子 */
   particles: boolean;
   paceMs: number;
+  /**
+   * 落子相时长（ms）—— **整套动画的节奏**，见 `render.ts` 的 `BoardRenderer.flipMs`。
+   *
+   * 放在对局级而不是玩家级：它纯粹是画面，两个行动方没有各自的「动画速度」。
+   * 与 `paceMs` 也不是一回事 —— 那个是**两次调用之间**等多久，这个是**一次
+   * 落子演多久**，两者互不影响（paceMs = 0 时上游一返回就直接往下走，
+   * 但动画仍然按它自己的节奏演完）。
+   */
+  flipMs: number;
 }
 
 /* ══════════════ 玩家级 ══════════════ */
@@ -149,6 +162,7 @@ export const DEFAULT_DUEL: DuelSettings = {
   animations: true,
   particles: true,
   paceMs: 1200,
+  flipMs: FLIP_MS,
 };
 
 export const DEFAULT_API: ApiSettings = {
@@ -213,6 +227,20 @@ export function clampPace(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n)) return DEFAULT_DUEL.paceMs;
   return Math.min(5000, Math.max(0, Math.round(n)));
+}
+
+/**
+ * 落子相时长。范围卡在 200–5000ms。
+ *
+ * 下限不是 0：0 表示「这一相不存在」，那正是 `animations` 开关的语义 ——
+ * 两个控件表达同一件事，用户会在「动效关着但时长非 0」这种状态上卡住。
+ * 上限 5000 是「再长就不像动画了，像卡住」。
+ */
+export function clampFlipMs(v: unknown): number {
+  if (v === "" || v === null || v === undefined) return DEFAULT_DUEL.flipMs;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return DEFAULT_DUEL.flipMs;
+  return Math.min(5000, Math.max(200, Math.round(n)));
 }
 
 export function clamp01(v: unknown): number {
@@ -319,6 +347,7 @@ export function load(): Persisted {
       animations: rawDuel.animations !== false,
       particles: rawDuel.particles !== false,
       paceMs: clampPace(rawDuel.paceMs),
+      flipMs: clampFlipMs(rawDuel.flipMs),
     },
     roles: {
       life: readRole(rawRoles.life),
