@@ -422,9 +422,12 @@ function ratioWinner(ratio: number, rules: GameRules): Role | null {
  * ═══ 空集合的情形 ═══
  *
  * 任意一方的合法集为空时，一对组合都不存在 —— 「没有组合能产生新局面」按字面
- * 成立，于是返回 true。这是对的：回合根本成立不了，游戏就该结束。此时另一方的
- * 合法集非空，所以不会落在上面 noLegalCell 那条分支里；两条分支都会让对局终止，
- * 只是报出的原因不同。
+ * 成立，于是返回 true。这是对的：回合根本成立不了，游戏就该结束。
+ *
+ * 注意 classifyTermination 里这条路径**走不到**：它先判 noLegalCell，而空集
+ * 正是 noLegalCell 的触发条件，所以空集总是先被报成那个更具体的原因。这里的
+ * 返回值是给「本函数单独被调用」时兜底的，语义上仍然正确 —— 只是不该指望
+ * classifyTermination 会把空集报成 repeatBlocked。
  */
 function roundIsBlocked(board: Board, topology: Topology, seen: ReadonlySet<string>): boolean {
   const born = legalCells(board, "life");
@@ -444,27 +447,65 @@ function roundIsBlocked(board: Board, topology: Topology, seen: ReadonlySet<stri
 /**
  * 终局判定。返回 null 表示对局继续。
  *
- * ═══ `role` 只管两件事 ═══
+ * ═══ 判定单位是对局，不是任何一方 ═══
  *
- * 参数 `role` 是**该回合里被问的那一方**，但它只对下面两处有意义：
+ * 这个函数曾经有一个 `role` 参数 —— 「该回合里被问的那一方」。
+ * **它已经被去掉了，而且不应该被加回来。** 四条终局条件全是对局级的：
  *
- *   - `noLegalCell`：按角色判。「该角色必须行动，却没有任何一格可翻」——
- *     棋盘全死时死之执无处可翻、棋盘全活时生之执无处可翻。这时回合无法成立。
- *   - 胜负线的占比判胜：判的是当前局面本身，与角色无关（`role` 只是恰好经过）。
+ *   - 胜负线判的是**当前局面**的占比，和谁在问没有关系
+ *   - `repeatBlocked` 判的是**回合**（理由见 roundIsBlocked）：一对落点都推不动
+ *   - `noLegalCell` 判的是**棋盘本身**：全死则死之执无处可翻，全活则生之执
+ *     无处可翻。这是棋盘的性质，不是「轮到谁」的性质
  *
- * 对 `repeatBlocked` 则**不再有意义** —— 它是回合级的（见 roundIsBlocked）：
- * 同一个局面上问生之执与问死之执，结论必须一致。两者的区别是
- * 「没有落点（必须停）」与「有落点但整盘推不动（走也白走）」，两回事，不能合并。
+ * 去掉 `role` 是下面那处修复的**结论**，不是顺手做的清理：旧的 `noLegalCell`
+ * 只查被问的那一方，于是同一个全死棋盘上「问死之执」得到 `noLegalCell`、
+ * 「问生之执」得到 `repeatBlocked` —— 结论碰巧一样（占比 0 也算出死之执胜），
+ * 但**原因是错的**。一条对局级的判定只因提问的角色不同就报出不同的原因，
+ * 就说明那个参数本来就不该存在。
+ *
+ * ═══ noLegalCell：把棋盘清空 / 占满的一方获胜 ═══
+ *
+ * 原因名是 `noLegalCell`（那一方一格都落不下去），但它真正的含义要具体得多，
+ * 而且要具体地读 —— 它判的从来不是「谁没棋走」，而是**谁已经把棋盘做成了
+ * 自己要的样子**：
+ *
+ *   - 死之执无处可翻 ⟺ 棋盘**全死** ⟺ 死之执把全部活细胞**清空**了
+ *   - 生之执无处可翻 ⟺ 棋盘**全活** ⟺ 生之执把整个棋盘**占满**了
+ *
+ * 清空与占满正是双方各自的目的被推到极限的形态 —— 一方的目的彻底达成，
+ * 对方自然一格都翻不动。所以判它胜。「无棋可走」只是这件事在棋盘上的症状，
+ * 不是判胜的理由；照字面去读，很容易反过来以为是在惩罚走不动的那一方。
+ *
+ * 旧写法是 `winner: ratioWinner(ratio, rules)`，也就是错的，两条理由：
+ *
+ *   1. 它**依赖阈值**。棋盘清空时占比恰为 0 或 1，在默认阈值下碰巧算出同一个
+ *      胜方；阈值一被推到极端就改判 —— 例如 `lifeWinRatio = 0` 时，
+ *      ratioWinner 里生之执那条判在前（`0 >= 0` 先命中），全死棋盘会被判给
+ *      生之执。「把棋盘清空」这种终极胜利不该取决于一条可以随便调的线。
+ *   2. 它只在**被问的那一方**为空时才检查（见上）。
+ *
+ * 两侧的检查不会同时命中：死之执无落点 ⟺ 一格活细胞都没有，生之执无落点
+ * ⟺ 一格死细胞都没有；两者同时成立要求棋盘一个格子都不剩，而 MIN_SIZE = 4。
+ * 顺序因此无关紧要，这里按「死 → 生」写，与 types.ts 里 TerminationReason
+ * 的列举顺序一致。
+ *
+ * ═══ repeatBlocked 的胜方仍然来自 ratioWinner ═══
+ *
+ * 这一条**没有**跟着 noLegalCell 一起变成「无棋可走者胜」，是刻意的：
+ * 整盘推不动意味着**占比也冻住了** —— 没有新局面，就不会有新的占比值。
+ * 若此刻占比已在某条线之外，那一方实际上会把这个占比无限保持下去，
+ * 「连续 N 代」的防抖当然满足（欠的只是回合数）。所以判它胜。
+ * 只有占比夹在两条线之间时才是和局。
+ *
+ * 这也是「防抖不在这里再卡一道」的理由：防抖的作用是**挡住一代走运就赢**，
+ * 而游戏既然已经因为别的原因要结束了，再卡防抖就会出现「棋盘全活、生之执却
+ * 因为只持续了一代而判和局」这种说不通的结果。
  *
  * ═══ 判定顺序是有讲究的，不能重排 ═══
  *
  *   1. 连续越界 ≥ 该侧 streak → 判该方胜
- *   2. 当前行动方无合法动作（noLegalCell / repeatBlocked）→ 按当前占比定胜负
+ *   2. 走投无路：noLegalCell（清空/占满棋盘者胜）/ repeatBlocked（按占比定胜负）
  *   3. 回合上限 → 和局
- *
- * 第 2 条内部也有次序：先判 noLegalCell 再判 repeatBlocked。两者都是 O(1) 与
- * O(|落点|²) 的差别，先便宜的；而且空集若不先判，pair 扫描会对空集返回 true，
- * 把 noLegalCell 误报成 repeatBlocked。
  *
  * 第 1 条排最前，因为那是玩家主动争取的目标 —— 已经赢到手的东西不该被
  * 「正好这回合也没棋可走」改写成一个不同的原因（更不该变成和局）。
@@ -472,9 +513,10 @@ function roundIsBlocked(board: Board, topology: Topology, seen: ReadonlySet<stri
  * 第 2 条排在第 3 条之前：无棋可走与回合上限同时成立时，「走投无路」是更具体的
  * 那个原因，回合上限只是兜底。两者都判和局的话，报哪个原因会影响 UI 上的复盘文案。
  *
- * 第 2 条那半句「按占比定胜负」是刻意加的：防抖的作用是**挡住一代走运就赢**，
- * 而游戏既然已经因为别的原因要结束了，再卡防抖就会出现「棋盘全活、生之执却
- * 因为只持续了一代而判和局」这种说不通的结果。
+ * 顺序同时也照顾了开销，从便宜到贵：胜负线是一条 O(历史长度) 的末尾连续段计数；
+ * noLegalCell 是两次 O(格数) 的线性扫描；`roundIsBlocked` 最贵，最坏要扫完
+ * |生执落点| × |死执落点| 个组合。而且空集若不先判，pair 扫描会对空集返回 true、
+ * 把 noLegalCell 误报成 repeatBlocked。
  *
  * 两侧胜负线不会同时触发 —— 两条线判的都是**末尾**的连续序列，
  * 而同一个占比不可能既 ≥ lifeWinRatio 又 ≤ deathWinRatio（0.6 > 0.05）。
@@ -491,7 +533,6 @@ function roundIsBlocked(board: Board, topology: Topology, seen: ReadonlySet<stri
  */
 export function classifyTermination(
   snap: GameSnapshot,
-  role: Role,
   rules: GameRules,
   seen: ReadonlySet<string>,
 ): Termination | null {
@@ -510,12 +551,17 @@ export function classifyTermination(
     return { reason: "deathWinRatio", winner: "death" };
   }
 
-  // 2. 无棋可走。先判空集再判重复 —— 两者是不同情况，不能合并：
-  //    noLegalCell 按角色判（该角色没有落点），repeatBlocked 按回合判（整盘推不动）。
-  const options = legalCells(board, role);
-  if (options.length === 0) {
-    return { reason: "noLegalCell", winner: ratioWinner(ratio, rules) };
+  // 2. 走投无路。查两边、与被问的角色无关 —— 胜方是把棋盘**清空**（死执）或
+  //    **占满**（生执）的那一方，不套阈值（理由见函数头那段）。
+  //    两侧不可能同时为空（那要求棋盘一个格子都没有，而 MIN_SIZE = 4）。
+  if (legalCells(board, "death").length === 0) {
+    return { reason: "noLegalCell", winner: "death" };
   }
+  if (legalCells(board, "life").length === 0) {
+    return { reason: "noLegalCell", winner: "life" };
+  }
+
+  // 整盘推不动仍按占比定胜负 —— 占比冻住了，在界外的那一方会把它无限保持下去。
   if (roundIsBlocked(board, topology, seen)) {
     return { reason: "repeatBlocked", winner: ratioWinner(ratio, rules) };
   }

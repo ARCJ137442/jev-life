@@ -91,14 +91,14 @@ test("boardKey 含尺寸，尺寸不同的棋盘不会撞 key", () => {
 test("单次越界不足以判赢 —— 防抖生效", () => {
   const b = lifeRatioBoard(); // 当前占比 0.703125
   // 序列（历史 + 现算的当前）= [0.3, 0.7, 0.703125]，末尾连续越界 2 回合 < lifeStreak(3)
-  assert.equal(classifyTermination(snap(b, 10, [0.3, 0.7]), "life", rules, new Set<string>()), null);
+  assert.equal(classifyTermination(snap(b, 10, [0.3, 0.7]), rules, new Set<string>()), null);
 });
 
 test("连续越界达到 lifeStreak 回合，生之执获胜", () => {
   const b = lifeRatioBoard();
   // 序列 = [0.3, 0.7, 0.7, 0.703125] → 末尾连续 3 个 ≥ 0.6
   assert.deepEqual(
-    classifyTermination(snap(b, 10, [0.3, 0.7, 0.7]), "life", rules, new Set<string>()),
+    classifyTermination(snap(b, 10, [0.3, 0.7, 0.7]), rules, new Set<string>()),
     { reason: "lifeWinRatio", winner: "life" },
   );
 });
@@ -107,7 +107,7 @@ test("连续被打断则重新计数", () => {
   const b = lifeRatioBoard();
   // 序列 = [0.7, 0.7, 0.3, 0.703125] → 末尾只连续 1 个，前面的 0.3 把计数截断了
   assert.equal(
-    classifyTermination(snap(b, 10, [0.7, 0.7, 0.3]), "life", rules, new Set<string>()),
+    classifyTermination(snap(b, 10, [0.7, 0.7, 0.3]), rules, new Set<string>()),
     null,
   );
 });
@@ -116,13 +116,13 @@ test("死之执侧同理，且两侧阈值与防抖长度可以不同", () => {
   const b = deathRatioBoard(); // 当前占比 0.03125 ≤ deathWinRatio(0.05)
   // 序列 = [0.3, 0.03, 0.03125] → 连续 2 个 ≤ 0.05，未满 deathStreak(3)
   assert.equal(
-    classifyTermination(snap(b, 10, [0.3, 0.03]), "death", rules, new Set<string>()),
+    classifyTermination(snap(b, 10, [0.3, 0.03]), rules, new Set<string>()),
     null,
     "只连续 2 回合（当前这一代也计入），防抖未满",
   );
   // 序列 = [0.3, 0.03, 0.03, 0.03125] → 连续 3 个
   assert.deepEqual(
-    classifyTermination(snap(b, 10, [0.3, 0.03, 0.03]), "death", rules, new Set<string>()),
+    classifyTermination(snap(b, 10, [0.3, 0.03, 0.03]), rules, new Set<string>()),
     { reason: "deathWinRatio", winner: "death" },
   );
 });
@@ -131,7 +131,7 @@ test("0.109375 没有越死之执的界 —— 阈值是 0.05 不是 0.2", () =>
   const b = aboveDeathBoard(); // 当前占比 0.109375
   // 序列全是 0.1/0.109375 —— 高于 0.05，一个都不越界
   assert.equal(
-    classifyTermination(snap(b, 10, [0.1, 0.1, 0.1, 0.1]), "death", rules, new Set<string>()),
+    classifyTermination(snap(b, 10, [0.1, 0.1, 0.1, 0.1]), rules, new Set<string>()),
     null,
     "高于 0.05，不该被判越界（这条用例是阈值从 0.2 改到 0.05 时加的回归）",
   );
@@ -140,7 +140,7 @@ test("0.109375 没有越死之执的界 —— 阈值是 0.05 不是 0.2", () =>
 test("到回合上限仍未越界 → 和局", () => {
   const b = midRatioBoard(); // 当前占比 0.25，夹在两条线之间
   assert.deepEqual(
-    classifyTermination(snap(b, 90, [0.25, 0.25]), "life", rules, new Set<string>()),
+    classifyTermination(snap(b, 90, [0.25, 0.25]), rules, new Set<string>()),
     { reason: "turnLimit", winner: null },
   );
 });
@@ -149,7 +149,7 @@ test("胜负线优先于回合上限 —— 同一回合两者都满足时判胜
   const b = lifeRatioBoard();
   // 序列 = [0.7, 0.7, 0.703125]，turn 也已到 90
   assert.deepEqual(
-    classifyTermination(snap(b, 90, [0.7, 0.7]), "life", rules, new Set<string>()),
+    classifyTermination(snap(b, 90, [0.7, 0.7]), rules, new Set<string>()),
     { reason: "lifeWinRatio", winner: "life" },
     "两者同时满足时应判胜负，而不是和局",
   );
@@ -160,48 +160,120 @@ test("胜负线优先于无棋可走 —— 全死棋盘若已连续越界，原
   // 序列 = [0, 0, 0, 0]：生之执侧连续 0 个，死之执侧连续 4 个 ≥ deathStreak(3)。
   // 死之执此时也确实无格可翻（棋盘全死），但判定顺序把胜负线排在前面。
   assert.deepEqual(
-    classifyTermination(snap(b, 5, [0, 0, 0]), "death", rules, new Set<string>()),
+    classifyTermination(snap(b, 5, [0, 0, 0]), rules, new Set<string>()),
     { reason: "deathWinRatio", winner: "death" },
     "胜负线在前，就不该报成 noLegalCell",
   );
 });
 
 /* ═══ 走投无路 ═══
-   注意这是两种不同的情况，不能合并 —— 而且它们的**判定单位**也不一样：
+   注意这是两种不同的情况，不能合并 —— 而它们**都是对局级的**：
 
-   - noLegalCell：**按角色**判。该角色必须行动，但可翻集合本身就是空的
-     （全死 → 死执无处可翻）。回合因此根本成立不了，游戏结束。
-   - repeatBlocked：**按回合**判。回合的结构是「双方同时各走一步，再演化一代」，
-     所以「推不动」是对回合而言的 —— 只要存在**任意一对**
-     (生之执落点, 死之执落点) 能演化出 seen 之外的局面，这一回合就推得动。
+   - noLegalCell：某一方一格都落不下去了 —— 全死（死之执把活细胞**清空**了）
+     / 全活（生之执把棋盘**占满**了）。**清空或占满的那一方获胜**。
+   - repeatBlocked：双方都有落点，但不存在任何一对 (生之执落点, 死之执落点)
+     能演化出 seen 之外的局面 —— 走也白走。胜方按当前占比定，理由见 life.ts。
+
+   ═══ noLegalCell 判的是「谁把棋盘做成了自己要的样子」 ═══
+
+   原因名是 noLegalCell，但它不是「谁没棋走谁就输」—— 恰恰相反：
+   一方无子可翻 ⟺ 棋盘全死或全活 ⟺ **它已经把棋盘做成了自己目的的样子**
+   （死之执清空全部活细胞 / 生之执把整个棋盘占满）。对方一格都翻不动，
+   正是因为它的目的已经彻底达成。所以判它胜，而不是像早先那样去套占比阈值。
+   套阈值只在棋盘恰好全死/全活时碰巧给出同一个答案，阈值一被推到极端就会
+   把「清空棋盘」改判掉（见下面那条极端阈值的用例）。
+
+   ═══ 为什么这条以前是「按角色判」而现在不是 ═══
+
+   旧实现只查**被问的那一方**，于是全死棋盘上问生之执会掉进 repeatBlocked
+   —— 结论碰巧一样（占比 0 也算出死之执胜），但**原因是错的**。终局条件
+   全都是对局级的，不属于任何一方，所以 classifyTermination 的 role 参数
+   已经去掉了。**去掉 role 是那处修复的结论，不是顺手做的清理** ——
+   下一个人想把这个参数加回来时，先看 life.ts 里那段注释。
+
+   ═══ repeatBlocked 的判定单位 ═══
 
    按角色判 repeatBlocked 是错的：一方全惰性、另一方还有得走时会被误判成卡死。
    实测（16×16 的方块阵，方块间隔 2 格，36 格）确实如此 —— 死之执的 36 个落点
    全是惰性的，而它的回合搭档生之执有 220 个落点、其中 156 个能改变局面。
-   旧实现按角色判，于是第 1 代就终局，而它明明推得动。 */
+   旧实现按角色判，于是第 1 代就终局，而它明明推得动。
 
-test("棋盘全死时，死之执无格可翻 —— 此时按占比判死之执胜", () => {
+   ═══ 「无棋可走但占比在两线之间 → 和局」对 noLegalCell 不可达 ═══
+
+   可翻集合为空 ⟺ 棋盘全死或全活 ⟺ 占比恰为 0 或 1，永远落在极值。
+   「占比居中 → 和局」只能由 repeatBlocked 触达（见下面占比居中的那条用例）。 */
+
+test("棋盘被清空（全死）→ 死之执无格可翻 → 判死之执胜", () => {
   const b = boardFromRows(["....", "....", "....", "...."]);
-  // 占比 0 ≤ deathWinRatio，防抖未满（序列 = [0, 0] → 连续 2 < 3）本来不该判赢；
-  // 但游戏因为「无棋可走」而终止，此时直接按占比定胜负
+  // 占比 0：防抖未满（序列 = [0, 0] → 连续 2 < deathStreak(3)），
+  // 胜负线这一条本来不触发；判死之执胜靠的是「棋盘已被它清空」本身。
   assert.deepEqual(
-    classifyTermination(snap(b, 5, [0]), "death", rules, new Set<string>()),
+    classifyTermination(snap(b, 5, [0]), rules, new Set<string>()),
     { reason: "noLegalCell", winner: "death" },
   );
+  /*
+   * 这条用例**曾经要问两次**，两次的答案还不一样：
+   *   问死之执 → { noLegalCell, death }
+   *   问生之执 → { repeatBlocked, death }   ← 结论碰巧对，原因错
+   * 全死棋盘上生之执**有**落点（16 个死格全可翻），旧实现只查被问的那一方，
+   * 于是漏掉了「死之执已把活细胞清空」这个真正的原因。
+   *
+   * 现在 role 参数没了，两次提问合并成上面那一次 —— 第二行从此不可表达。
+   * 这正是这次修复要的效果，所以这里不再重复调用（重复调用只会是同一行代码
+   * 写两遍，什么也锁不住）。旧行为由 git 历史与本次提交信息留档。
+   */
 });
 
-test("棋盘全活时，生之执无格可翻 —— 此时按占比判生之执胜", () => {
+test("棋盘被占满（全活）→ 生之执无格可翻 → 判生之执胜", () => {
+  // 对称的另一半：全活棋盘上死之执**有**落点（16 个活格全可翻），
+  // 旧实现问死之执时同样会掉进 repeatBlocked。查两边才治得住这一半。
   const b = boardFromRows(["####", "####", "####", "####"]);
   assert.deepEqual(
-    classifyTermination(snap(b, 5, [1]), "life", rules, new Set<string>()),
+    classifyTermination(snap(b, 5, [1]), rules, new Set<string>()),
     { reason: "noLegalCell", winner: "life" },
   );
 });
 
-test("无棋可走优先于回合上限 —— 回合已满但无棋可走时，原因归无棋可走", () => {
+/*
+ * 这条锁的是「胜方不来自阈值」这个新性质。
+ *
+ * 两条规则把阈值推到了极端。注意两条断言里**真正有鉴别力的是第二条**：
+ *   - deathWinRatio = 0：全死棋盘占比 0，而 `0 <= 0` 仍然成立，所以就算胜方
+ *     来自 ratioWinner，也还是判死之执胜 —— 这一条单独看是**等价**的，
+ *     留着是因为它正是「把死之执的线调到 0」这个最自然的误操作。
+ *   - lifeWinRatio = 0：ratioWinner 里生之执那条判在前，`0 >= 0` 先命中，
+ *     于是旧写法会把**全死棋盘判给生之执** —— 荒谬。这一条才有鉴别力。
+ * 两条一起，把「胜方与阈值无关」钉死。
+ */
+test("『清空棋盘』的胜方不来自阈值 —— 阈值推到极端时结论不变", () => {
+  const dead = boardFromRows(["....", "....", "....", "...."]);
+  const full = boardFromRows(["####", "####", "####", "####"]);
+  // 阈值推到极端，但防抖与历史刻意留短（序列 = [0, 0]，连续 2 < streak 3），
+  // 免得胜负线那条分支抢在前面 —— 那样测的就不是 noLegalCell 了。
+  const noWinLine: GameRules = { ...rules, deathWinRatio: 0 };
+  const noLifeLine: GameRules = { ...rules, lifeWinRatio: 0 };
+
+  assert.deepEqual(
+    classifyTermination(snap(dead, 5, [0]), noWinLine, new Set<string>()),
+    { reason: "noLegalCell", winner: "death" },
+    "deathWinRatio 调到 0，全死棋盘仍应判死之执胜",
+  );
+  assert.deepEqual(
+    classifyTermination(snap(full, 5, [1]), noWinLine, new Set<string>()),
+    { reason: "noLegalCell", winner: "life" },
+    "同一套极端阈值下，全活棋盘仍应判生之执胜",
+  );
+  assert.deepEqual(
+    classifyTermination(snap(dead, 5, [0]), noLifeLine, new Set<string>()),
+    { reason: "noLegalCell", winner: "death" },
+    "lifeWinRatio 调到 0 时，『清空棋盘』绝不能被判给生之执 —— 胜方与阈值无关",
+  );
+});
+
+test("清空棋盘优先于回合上限 —— 回合已满但棋盘已被清空时，原因归 noLegalCell", () => {
   const b = boardFromRows(["....", "....", "....", "...."]);
   assert.deepEqual(
-    classifyTermination(snap(b, 90, [0]), "death", rules, new Set<string>()),
+    classifyTermination(snap(b, 90, [0]), rules, new Set<string>()),
     { reason: "noLegalCell", winner: "death" },
     "无棋可走在回合上限之前，原因不该报成 turnLimit",
   );
@@ -288,30 +360,24 @@ test("只有一方惰性不算卡死 —— repeatBlocked 是回合级的，与�
 
   // 死之执单独走一步确实全惰性 —— 但它和生之执是同一个回合的两半。
   // 存在能走出新局面的组合（实测第一对命中是 l=1, d=38），所以这一回合推得动。
+  // 这里曾经还要用另一个 role 再问一遍，确认两边结论一致；role 参数去掉之后
+  // 「两边」已经不存在了，那次调用随之消失。
   assert.equal(
-    classifyTermination(snap(b, 10, []), "death", rules, seen),
+    classifyTermination(snap(b, 10, []), rules, seen),
     null,
     "死之执的落点全惰性，但生之执还推得动 —— 不该判走投无路",
-  );
-  assert.equal(
-    classifyTermination(snap(b, 10, []), "life", rules, seen),
-    null,
-    "同一个局面上两个角色的结论必须一致：repeatBlocked 不含角色",
   );
 });
 
 test("全部组合的后继都已见过时才判 repeatBlocked（占比居中 → 和局）", () => {
   const b = boardFromRows(blockMesh(2));
   const seen = new Set<string>([boardKey(b), ...roundSuccessors(b)]);
-  // 占比 36/256 = 0.140625，夹在两条线之间；turn 10 < turnLimit 90
+  // 占比 36/256 = 0.140625，夹在两条线之间；turn 10 < turnLimit 90。
+  // 注意「占比居中 → 和局」这条**只可能由 repeatBlocked 触达**：
+  // noLegalCell 只出现在占比恰为 0 或 1 的时候（见本文件「走投无路」那段）。
   assert.deepEqual(
-    classifyTermination(snap(b, 10, []), "life", rules, seen),
+    classifyTermination(snap(b, 10, []), rules, seen),
     { reason: "repeatBlocked", winner: null },
-  );
-  assert.deepEqual(
-    classifyTermination(snap(b, 10, []), "death", rules, seen),
-    { reason: "repeatBlocked", winner: null },
-    "回合级的判定不该因为换了个角色就改口",
   );
 });
 
@@ -324,7 +390,7 @@ test("手写的 seen 也能构造出真卡死：孤零零一个活细胞的下�
   const seen = new Set<string>([boardKey(b), boardKey(dead)]);
   // 占比 1/16 = 0.0625，高于 deathWinRatio(0.05) → 不硬判胜方
   assert.deepEqual(
-    classifyTermination(snap(b, 10, []), "life", rules, seen),
+    classifyTermination(snap(b, 10, []), rules, seen),
     { reason: "repeatBlocked", winner: null },
   );
 });
@@ -338,7 +404,7 @@ test("只要还有一对组合能产生新局面，就不该判 repeatBlocked", 
   // 只漏掉其中一种 —— 只要它还能被某一对组合走出来，就不算推不动
   const seen = new Set<string>([boardKey(b), ...fresh.slice(1)]);
   assert.equal(
-    classifyTermination(snap(b, 10, []), "life", rules, seen),
+    classifyTermination(snap(b, 10, []), rules, seen),
     null,
     "漏掉一种新局面都不该判走投无路，何况这里漏的是全部新局面里的一种",
   );
@@ -351,7 +417,7 @@ test("repeatBlocked 时同样按占比定胜负 —— 占比越界则判该方�
   const seen = new Set<string>([boardKey(b), ...roundSuccessors(b)]);
   // 序列 = [0.9, 0.9375] → 连续 2 < lifeStreak(3)，胜负线这一条确实没越
   assert.deepEqual(
-    classifyTermination(snap(b, 10, [0.9]), "life", rules, seen),
+    classifyTermination(snap(b, 10, [0.9]), rules, seen),
     { reason: "repeatBlocked", winner: "life" },
   );
 });
@@ -360,7 +426,7 @@ test("终局判定不改动入参", () => {
   const b = boardFromRows([".##.", ".##.", "....", "...."]);
   const ratios = [0.25, 0.25];
   const before = Array.from(b.cells);
-  classifyTermination(snap(b, 10, ratios), "life", rules, new Set<string>());
+  classifyTermination(snap(b, 10, ratios), rules, new Set<string>());
   assert.deepEqual(Array.from(b.cells), before);
   assert.deepEqual(ratios, [0.25, 0.25], "ratioHistory 被改动了");
 });

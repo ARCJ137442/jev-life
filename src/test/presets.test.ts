@@ -11,7 +11,7 @@ import {
 import { PATTERNS, detectPatterns } from "../core/patterns.js";
 import { PRESETS } from "../core/presets.js";
 import type { Opening } from "../core/presets.js";
-import type { GameSnapshot, Role } from "../core/types.js";
+import type { GameSnapshot } from "../core/types.js";
 
 /* ══════════════════════════════════════════════════════════════════
    这个测试文件里有两处**刻意自己实现一遍**的东西：边距的计算与演化的推进。
@@ -72,7 +72,12 @@ function requiredMargin(board: number, extent: number): number {
   return Math.max(0, Math.min(2, Math.floor((board - extent) / 2)));
 }
 
-/** 与 T13 的对局循环同构：每代之后两种角色都问一次终局 */
+/**
+ * 与 T13 的对局循环同构：每代之后问一次终局。
+ *
+ * 曾经这里分角色问两次（`role` 视角）。终局条件全是对局级的、与提问的一方无关，
+ * `classifyTermination` 的 `role` 参数已因此去掉，两次提问合并成一次。
+ */
 function survives(rowStrings: readonly string[], preset: (typeof PRESETS)[number], gens: number) {
   const topology = preset.defaultTopology;
   let board = boardFromRows([...rowStrings]);
@@ -84,14 +89,9 @@ function survives(rowStrings: readonly string[], preset: (typeof PRESETS)[number
     seen.add(boardKey(board));
     const snap: GameSnapshot = { board, topology, turn: gen, ratioHistory: [...ratioHistory] };
 
-    for (const role of ["life", "death"] as const satisfies readonly Role[]) {
-      const verdict = classifyTermination(snap, role, preset.rules, seen);
-      assert.equal(
-        verdict,
-        null,
-        `第 ${gen} 代就终局了（${role} 视角）：${JSON.stringify(verdict)}`,
-      );
-    }
+    const verdict = classifyTermination(snap, preset.rules, seen);
+    assert.equal(verdict, null, `第 ${gen} 代就终局了：${JSON.stringify(verdict)}`);
+
     ratioHistory.push(aliveCount(board) / (board.cols * board.rows));
   }
   return { board, counts: ratioHistory.map((r) => Math.round(r * board.cols * board.rows)) };
@@ -211,7 +211,7 @@ test("脉冲星是唯一的例外：13×13 在 16×16 上只能留 1 格", () =>
 
 /* ═══ 三、开局不能立刻崩，也不能立刻填满 ═══ */
 
-test("每个开局至少能撑 20 代而不触发终局（两种角色都不判）", () => {
+test("每个开局至少能撑 20 代而不触发终局", () => {
   for (const p of PRESETS) {
     for (const o of p.openings) {
       const rows = o.build(p.cols, p.rows);
@@ -221,7 +221,9 @@ test("每个开局至少能撑 20 代而不触发终局（两种角色都不判�
       } catch (err) {
         assert.fail(`「${o.id}」（${p.cols}×${p.cols}）：${(err as Error).message}`);
       }
-      // 死绝也是一种「立刻崩」：棋盘空掉之后占比恰好 0，落在死之执的线内
+      // 死绝也是一种「立刻崩」：棋盘空掉之后占比恰好 0，落在死之执的线内。
+      // 注意棋盘被清空本身也是一个即时的终局条件（noLegalCell → 死之执胜），
+      // 所以这条断言同时也是「开局不能一代就自杀」的守卫。
       assert.ok(aliveCount(result.board) > 0, `「${o.id}」20 代之后棋盘空了`);
     }
   }
