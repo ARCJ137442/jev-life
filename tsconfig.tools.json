@@ -10,7 +10,12 @@
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    // tools/ 内部互相 import 必须带 .ts 后缀：这些脚本由 Node 的
+    // type-stripping 直接运行，而 Node **不做 .js → .ts 的重写**，
+    // 写 .js 会当场 ERR_MODULE_NOT_FOUND。src/ 用 .js 是另一回事
+    // （那边先编译再运行）。完整规矩见 tools/_load.ts 的文件头。
+    "allowImportingTsExtensions": true
   },
   "include": ["tools/**/*.ts"],
   // seal-key.ts 是唯一一个排除项，而且是被迫的：它 import 的

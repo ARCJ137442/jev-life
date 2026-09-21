@@ -4,7 +4,8 @@
  * 三个被测对象（T6 定案之后的关系）：
  *   referenceStep —— 测试基准，朴素
  *   lifeStep      —— **生产实现**，朴素但独立成文（见 src/core/life.ts 的说明）
- *   bitwiseStep   —— 位并行，被实测淘汰，保留备查
+ *   bitwiseStep   —— 位并行，被实测淘汰；现在的身份是**独立差分基准**
+ *                    （位平面建模，唯一能抓住「两条朴素腿一起错」的那条腿）
  * 决策看的是「朴素 vs 位并行」两列，生产列是给这次决策的落地结果留一个
  * 可复测的锚点。
  *
@@ -15,38 +16,32 @@
  * 所以两个实现都写出来、都用差分测试锁死正确性，然后由这里的数据决定
  * 导出哪一份。结论与实测表格记在 DESIGN.md。
  *
- * ═══ 为什么 import 的是 dist-test 而不是 src ═══
+ * ═══ 怎么拿到 core ═══
  *
- * Node 的 type-stripping **不做 `.js` → `.ts` 的重写**：直接
- * `node tools/bench-step.ts` 时，脚本里 import `../src/core/life.js` 会报
- * ERR_MODULE_NOT_FOUND（`life.ts` 自己的 `./types.js` 同样如此）。
- * 所以这里运行时 import 的是编译产物 `dist-test/core/life.js` —— 也正是
- * 单元测试跑的那一份。这反而更该测：真正上线的是编译后的 JS。
- *
- * 代价是**必须先编译**。编译产物不在就退出太粗暴（这是诊断工具不是门禁），
- * 所以这里打印一条可执行的补救命令，并且**如实说明「本次没有测量」**。
- * 「没查」绝不能长得像「查过了没问题」—— 这条教训在 tools/scan.ts 的
- * 文件头有完整复盘。
+ * 走 `tools/_load.ts` 的 `loadCore()`，它是全仓唯一的入口，
+ * 负责「检查编译产物是否存在 / 是否比源码旧」。**不要在别的工具里
+ * 自己 import `dist-test`** —— 那个坑这个文件亲自踩过一次：
+ * 跑完变异测试忘了重新编译，基准拿着被故意改坏的产物跑出了一整张
+ * 看起来完全正常的错表。规矩与代价写在 `_load.ts` 的文件头。
  *
  * 用法：
  *   node node_modules/typescript/bin/tsc -p tsconfig.test.json
  *   node tools/bench-step.ts
  *   node tools/bench-step.ts --sizes=4,8,16,32   # 外推用，可超出 MAX_SIZE
  *
- * 退出码恒为 0：它只报告数据，不判定成败。
+ * 退出码：**跑完了就恒为 0**（它只报告数据，不判定谁快谁慢，
+ * 更不会因为「位并行更慢」而失败）。但**根本没跑成**（产物缺失或过期）
+ * 走 `loadCore()` 的 exit 1 —— 那两件事必须长得不一样。
  */
 import { performance } from "node:perf_hooks";
-import { statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { loadCore } from "./_load.ts";
 import type { Board, Topology } from "../src/core/types.js";
 
 /** 类型来自源码（源码永远在），运行时来自编译产物（可能没编译） */
 type LifeModule = typeof import("../src/core/life.js");
 type StepFn = (b: Board, topo: Topology) => Board;
-
-const SRC_DIR = new URL("../src/core/", import.meta.url);
-const DIST_FILE = new URL("../dist-test/core/life.js", import.meta.url);
 
 /* ═══ 测量参数 ═══ */
 
@@ -172,44 +167,11 @@ function preheat(fn: StepFn, topo: Topology): void {
 
 /* ═══ 主流程 ═══ */
 
-function distExists(): boolean {
-  try {
-    statSync(DIST_FILE);
-    return true;
-  } catch {
-    return false;
-  }
-}
+/** 产物存在性、是否过期，都由 _load.ts 统一把关（缺失/过期 → exit 1） */
+const ARTIFACT = new URL("../dist-test/core/life.js", import.meta.url);
+const life = await loadCore<LifeModule>("core/life.js");
 
-/** 编译产物比源码旧时，测的是过期代码 —— 这种事必须说出来 */
-function stalenessNote(): string | null {
-  try {
-    const dist = statSync(DIST_FILE).mtimeMs;
-    const stale = ["life.ts", "types.ts"]
-      .map((f) => ({ f, t: statSync(new URL(f, SRC_DIR)).mtimeMs }))
-      .filter((x) => x.t > dist)
-      .map((x) => x.f);
-    if (stale.length === 0) return null;
-    return `⚠ 编译产物比源码旧（${stale.join(" / ")} 改过），本次测的是**过期代码**。`;
-  } catch {
-    return null;
-  }
-}
-
-if (!distExists()) {
-  console.log("✗ 找不到编译产物，基准测试未运行：");
-  console.log(`    ${fileURLToPath(DIST_FILE)}`);
-  console.log("  先编译：");
-  console.log("    node node_modules/typescript/bin/tsc -p tsconfig.test.json");
-  console.log("  **本次没有测到任何数据** —— 上面这句不是「测了没问题」。");
-  process.exit(0);
-}
-
-const life = (await import(DIST_FILE.href)) as LifeModule;
 const { referenceStep, lifeStep, bitwiseStep, toRows } = life;
-
-const stale = stalenessNote();
-if (stale) console.log(`${stale}\n`);
 
 console.log("演化实现基准 —— 朴素 vs 位并行");
 console.log(
@@ -217,7 +179,7 @@ console.log(
     `随机棋盘 p=${DENSITY}`,
 );
 console.log(`  尺寸：${SIDES.map((n) => `${n}×${n}`).join(" ")}`);
-console.log(`  被测对象：${fileURLToPath(DIST_FILE)}`);
+console.log(`  被测对象：${fileURLToPath(ARTIFACT)}`);
 console.log("");
 
 for (const topo of TOPOLOGIES) {
