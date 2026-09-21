@@ -396,13 +396,75 @@ function ratioWinner(ratio: number, rules: GameRules): Role | null {
 }
 
 /**
+ * 这一回合推不动吗 —— repeatBlocked 的判定核心。
+ *
+ * ═══ 为什么是「一对落点」而不是「一个角色的落点」 ═══
+ *
+ * 回合的结构是**双方同时各走一步，然后演化一代**：
+ *
+ *     ① 生之执翻转一个死格  ② 死之执翻转一个活格  ③ lifeStep 演化一代
+ *
+ * 所以「局面还能不能动」是对**回合**问的，不是对角色问的：只要存在任意一对
+ * (生之执落点, 死之执落点) 能演化出 `seen` 之外的局面，这一回合就推得动。
+ *
+ * 只查「该角色单独走一步 + 演化」是错的 —— 它忽略了同回合另一方的落子。
+ * 实测反例（16×16 方块阵、方块间隔 2 格、36 格）：死之执的 36 个落点全部惰性
+ * （方块是静物，敲掉任一角下一代都长回原样），而同一批回合里生之执有 220 个
+ * 落点、其中 156 个能改变局面。旧实现按角色判，第 1 代就报 repeatBlocked 终局，
+ * 而它明明推得动。
+ *
+ * ═══ 早退出不是可选项 ═══
+ *
+ * 健康局面上通常前几对就命中新局面，扫全一整轮是纯浪费；只有真卡死时才需要
+ * 扫完 |生执落点| × |死执落点| 个组合（那时本来就该结束了）。所以这里一找到
+ * 新局面就立刻返回 false。
+ *
+ * ═══ 空集合的情形 ═══
+ *
+ * 任意一方的合法集为空时，一对组合都不存在 —— 「没有组合能产生新局面」按字面
+ * 成立，于是返回 true。这是对的：回合根本成立不了，游戏就该结束。此时另一方的
+ * 合法集非空，所以不会落在上面 noLegalCell 那条分支里；两条分支都会让对局终止，
+ * 只是报出的原因不同。
+ */
+function roundIsBlocked(board: Board, topology: Topology, seen: ReadonlySet<string>): boolean {
+  const born = legalCells(board, "life");
+  const killed = legalCells(board, "death");
+
+  for (const life of born) {
+    // 生之执先落子。翻一次得到一个中间局面，再让死之执在它上面落子 ——
+    // 两边都基于**演化前**的棋盘决策，所以两者落点必然不同格（见 legalCells）。
+    const afterLife = flip(board, life);
+    for (const death of killed) {
+      if (!seen.has(boardKey(lifeStep(flip(afterLife, death), topology)))) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * 终局判定。返回 null 表示对局继续。
+ *
+ * ═══ `role` 只管两件事 ═══
+ *
+ * 参数 `role` 是**该回合里被问的那一方**，但它只对下面两处有意义：
+ *
+ *   - `noLegalCell`：按角色判。「该角色必须行动，却没有任何一格可翻」——
+ *     棋盘全死时死之执无处可翻、棋盘全活时生之执无处可翻。这时回合无法成立。
+ *   - 胜负线的占比判胜：判的是当前局面本身，与角色无关（`role` 只是恰好经过）。
+ *
+ * 对 `repeatBlocked` 则**不再有意义** —— 它是回合级的（见 roundIsBlocked）：
+ * 同一个局面上问生之执与问死之执，结论必须一致。两者的区别是
+ * 「没有落点（必须停）」与「有落点但整盘推不动（走也白走）」，两回事，不能合并。
  *
  * ═══ 判定顺序是有讲究的，不能重排 ═══
  *
  *   1. 连续越界 ≥ 该侧 streak → 判该方胜
  *   2. 当前行动方无合法动作（noLegalCell / repeatBlocked）→ 按当前占比定胜负
  *   3. 回合上限 → 和局
+ *
+ * 第 2 条内部也有次序：先判 noLegalCell 再判 repeatBlocked。两者都是 O(1) 与
+ * O(|落点|²) 的差别，先便宜的；而且空集若不先判，pair 扫描会对空集返回 true，
+ * 把 noLegalCell 误报成 repeatBlocked。
  *
  * 第 1 条排最前，因为那是玩家主动争取的目标 —— 已经赢到手的东西不该被
  * 「正好这回合也没棋可走」改写成一个不同的原因（更不该变成和局）。
@@ -422,8 +484,8 @@ function ratioWinner(ratio: number, rules: GameRules): Role | null {
  * `seen` 必须由调用方构造并**包含当前局面**（当前局面当然是「见过的」），
  * 之后每走一回合把新局面的 key 加进去。函数只读它，不改它。
  *
- * 注意 `seen` 是**按角色**使用的：生执与死执的合法集互斥，后继自然也不同，
- * 所以一方走投无路不代表另一方也是。这正是 `role` 参数不可省的原因。
+ * `seen` 里装的是**回合结束时**的局面（双方都落完子、演化过一代之后的那个），
+ * 不是某一方单独落子后的局面 —— 与 roundIsBlocked 的口径一致。
  *
  * 本函数不改动任何入参（引擎纯度的硬约束，见文件头）。
  */
@@ -448,16 +510,13 @@ export function classifyTermination(
     return { reason: "deathWinRatio", winner: "death" };
   }
 
-  // 2. 无棋可走。先判空集再判重复 —— 两者是不同情况，不能合并。
-  //    空集若不先判，下面的 every 会对空数组返回 true，把 noLegalCell 误报成 repeatBlocked。
+  // 2. 无棋可走。先判空集再判重复 —— 两者是不同情况，不能合并：
+  //    noLegalCell 按角色判（该角色没有落点），repeatBlocked 按回合判（整盘推不动）。
   const options = legalCells(board, role);
   if (options.length === 0) {
     return { reason: "noLegalCell", winner: ratioWinner(ratio, rules) };
   }
-  const everyOptionRepeats = options.every((cell) =>
-    seen.has(boardKey(lifeStep(flip(board, cell), topology))),
-  );
-  if (everyOptionRepeats) {
+  if (roundIsBlocked(board, topology, seen)) {
     return { reason: "repeatBlocked", winner: ratioWinner(ratio, rules) };
   }
 

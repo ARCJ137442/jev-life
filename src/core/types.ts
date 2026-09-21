@@ -62,8 +62,20 @@ export type TerminationReason =
   | "lifeWinRatio"
   | "deathWinRatio"
   | "turnLimit"
-  | "noLegalCell" // 该角色的可翻集合本身就是空的
-  | "repeatBlocked"; // 可翻集合非空，但每一格翻完都会落回见过的局面
+  /**
+   * **按角色判**：该角色必须行动，但可翻集合本身就是空的（棋盘全死 → 死执无处
+   * 可翻 / 全活 → 生执无处可翻），回合因此根本成立不了。
+   */
+  | "noLegalCell"
+  /**
+   * **按回合判**：双方都有落点，但不存在任何一对 (生之执落点, 死之执落点)
+   * 能演化出见过的局面之外的新局面 —— 走也白走。
+   *
+   * 判定单位是回合而不是角色：回合的结构是「双方同时各走一步，再演化一代」，
+   * 一方惰性不代表这一回合推不动（另一方可能推得动）。所以同一个局面上问
+   * 生之执与问死之执，这一条必须给出相同结论。
+   */
+  | "repeatBlocked";
 
 export interface Termination {
   readonly reason: TerminationReason;

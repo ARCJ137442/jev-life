@@ -167,9 +167,18 @@ test("胜负线优先于无棋可走 —— 全死棋盘若已连续越界，原
 });
 
 /* ═══ 走投无路 ═══
-   注意这是两种不同的情况，不能合并：
-   - noLegalCell：该角色的可翻集合本身就是空的（全死 → 死执无处可翻）
-   - repeatBlocked：可翻集合非空，但每一格翻完演化一代都会落回见过的局面 */
+   注意这是两种不同的情况，不能合并 —— 而且它们的**判定单位**也不一样：
+
+   - noLegalCell：**按角色**判。该角色必须行动，但可翻集合本身就是空的
+     （全死 → 死执无处可翻）。回合因此根本成立不了，游戏结束。
+   - repeatBlocked：**按回合**判。回合的结构是「双方同时各走一步，再演化一代」，
+     所以「推不动」是对回合而言的 —— 只要存在**任意一对**
+     (生之执落点, 死之执落点) 能演化出 seen 之外的局面，这一回合就推得动。
+
+   按角色判 repeatBlocked 是错的：一方全惰性、另一方还有得走时会被误判成卡死。
+   实测（16×16 的方块阵，方块间隔 2 格，36 格）确实如此 —— 死之执的 36 个落点
+   全是惰性的，而它的回合搭档生之执有 220 个落点、其中 156 个能改变局面。
+   旧实现按角色判，于是第 1 代就终局，而它明明推得动。 */
 
 test("棋盘全死时，死之执无格可翻 —— 此时按占比判死之执胜", () => {
   const b = boardFromRows(["....", "....", "....", "...."]);
@@ -201,64 +210,145 @@ test("无棋可走优先于回合上限 —— 回合已满但无棋可走时，
 /*
  * repeatBlocked —— 设计文档漏掉的那条终局原因。
  *
- * 注意这条是**对判定规则本身的单元测试**，不是「构造了一个自然死局」。
- * 我推演过：4×4 角落放一个方块并不构成死局 —— 仍有落点能改变局面。
- * 自然死局要靠 `seen` 积累到把所有后继都覆盖才出现，很难在测试里手工构造。
- * 所以这里直接给定 `seen`，验证规则按预期裁决。
+ * 注意这些是**对判定规则本身的单元测试**，不是「构造了一个自然死局」。
+ * 我实测过：4×4 上根本不存在双方合起来也推不动的局面 —— 65536 种棋盘穷举，
+ * 在「双方都还有落点」的前提下，一对新局面都没有的局面是 **0 个**。
+ * （计划里「4×4 角落放一个孤立方块，双方落点可能都惰性」那条提示，
+ *   实测不成立：方块的 4 个角被敲掉任一格都会在一代后长回原样，但生之执的
+ *   12 个落点里有能改变局面的。）
+ *
+ * 所以「真卡死」只能由 `seen` 覆盖到全部后继来构造。下面给两种构造：
+ *   - 一个手写 `seen` 的（单个活细胞 → 后继只有空棋盘一种），不依赖任何公式
+ *   - 一个把全部组合的后继算进 `seen` 的
+ * 前者的夹具前提是显式写出来的，后者直接用「全部组合的后继」这个定义本身。
  */
-/** 夹具：4×4 的方块（静物），4 个活细胞 → 占比 0.25，夹在两条线之间 */
-const stuckBoard = () => boardFromRows([".##.", ".##.", "....", "...."]);
 
-/** 某角色全部落点的后继 —— 与实现在 classifyTermination 内部算的是同一件事 */
-function successorsOf(b: Board, role: "life" | "death"): Set<string> {
-  return new Set(legalCells(b, role).map((c) => boardKey(lifeStep(flip(b, c), "bounded"))));
+/**
+ * 16×16 的方块阵，方块之间空 `gap` 格。
+ *
+ * `gap = 2`（步长 4）摆出 9 个方块 / 36 格 / 占比 0.140625 —— 正是这次修复的
+ * 验收夹具。注意它**不是** presets.ts 里的 `block-mesh`：那个的间隔是 1 格
+ * （64 格），实测死之执的 64 个落点里有 4 个能改变局面，推得动，验不了这条。
+ */
+function blockMesh(gap: number): string[] {
+  const SIZE = 16;
+  const PAD = 2;
+  const stride = 2 + gap;
+  const grid = Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => "."));
+  for (let r = PAD; r + 1 < SIZE - PAD; r += stride) {
+    for (let c = PAD; c + 1 < SIZE - PAD; c += stride) {
+      grid[r][c] = "#";
+      grid[r][c + 1] = "#";
+      grid[r + 1][c] = "#";
+      grid[r + 1][c + 1] = "#";
+    }
+  }
+  return grid.map((row) => row.join(""));
 }
 
-test("所有候选落点都会导致重复时，判 repeatBlocked（占比居中 → 和局）", () => {
-  const b = stuckBoard();
-  const seen = new Set([boardKey(b), ...successorsOf(b, "life")]);
-  assert.deepEqual(
-    classifyTermination(snap(b, 10, [0.25]), "life", rules, seen),
-    { reason: "repeatBlocked", winner: null },
+/** 一对落点走完一回合后的局面 key —— 与实现在 classifyTermination 内部算的是同一件事 */
+function roundKey(b: Board, life: number, death: number): string {
+  return boardKey(lifeStep(flip(flip(b, life), death), "bounded"));
+}
+
+/** 全部 (生之执落点, 死之执落点) 组合的后继 key */
+function roundSuccessors(b: Board): Set<string> {
+  const out = new Set<string>();
+  for (const l of legalCells(b, "life")) {
+    for (const d of legalCells(b, "death")) out.add(roundKey(b, l, d));
+  }
+  return out;
+}
+
+/*
+ * 这条用例锁的是**被推翻的旧语义**，改写自
+ * 「两个角色的合法集不同，repeatBlocked 必须按角色分别判定」。
+ *
+ * 旧实现按角色判：死之执的 36 个落点全惰性 → 判它走投无路。但它从来不是
+ * 单独行动的 —— 同一个回合里生之执还要落一子，而那一子能把局面推到新局面。
+ * 判定单位错了，结论就错了。
+ */
+test("只有一方惰性不算卡死 —— repeatBlocked 是回合级的，与角色无关", () => {
+  const b = boardFromRows(blockMesh(2));
+  const seen = new Set<string>([boardKey(b)]);
+
+  // 夹具前提先钉死，免得将来棋盘或规则变了、用例却还在「靠运气」通过
+  const deaths = legalCells(b, "death");
+  assert.equal(deaths.length, 36, "夹具不是预期的 36 个活细胞");
+  assert.ok(
+    deaths.every((d) => boardKey(lifeStep(flip(b, d), "bounded")) === boardKey(b)),
+    "夹具前提不成立：死之执存在能改变局面的落点",
   );
-});
+  const lifes = legalCells(b, "life");
+  const lifeChanges = lifes.filter(
+    (l) => boardKey(lifeStep(flip(b, l), "bounded")) !== boardKey(b),
+  );
+  assert.equal(lifes.length, 220);
+  assert.equal(lifeChanges.length, 156, "夹具前提不成立：生之执能改变局面的落点数变了");
 
-test("只要还有一个候选能产生新状态，就不该判 repeatBlocked", () => {
-  const b = stuckBoard();
-  const all = legalCells(b, "life");
-  assert.ok(all.length > 1, "这个夹具需要至少两个候选才有意义");
-  // 只把「除第一个之外」的后继塞进 seen —— 第一个仍能产生新状态
-  const seen = new Set([boardKey(b)]);
-  for (const cell of all.slice(1)) seen.add(boardKey(lifeStep(flip(b, cell), "bounded")));
-  assert.equal(classifyTermination(snap(b, 10, [0.25]), "life", rules, seen), null);
-});
-
-test("两个角色的合法集不同，repeatBlocked 必须按角色分别判定", () => {
-  // 同一个 seen 下，一方走投无路而另一方还有路。
-  //
-  // 这个夹具上死之执的 4 个落点**全部**会演化回原局面：方块是静物，敲掉任一角
-  // 变成 L 三格，而缺的那格恰好有 3 个活邻居 —— 下一代又长回方块（实测确认）。
-  // 生之执的 12 个落点则各自走向新局面，没有一个回到原状。
-  const b = stuckBoard();
-  const seen = new Set([boardKey(b)]);
-
-  assert.deepEqual(
-    classifyTermination(snap(b, 10, [0.25]), "death", rules, seen),
-    { reason: "repeatBlocked", winner: null },
-    "死之执每一格翻完都回到原局面，应判走投无路",
+  // 死之执单独走一步确实全惰性 —— 但它和生之执是同一个回合的两半。
+  // 存在能走出新局面的组合（实测第一对命中是 l=1, d=38），所以这一回合推得动。
+  assert.equal(
+    classifyTermination(snap(b, 10, []), "death", rules, seen),
+    null,
+    "死之执的落点全惰性，但生之执还推得动 —— 不该判走投无路",
   );
   assert.equal(
-    classifyTermination(snap(b, 10, [0.25]), "life", rules, seen),
+    classifyTermination(snap(b, 10, []), "life", rules, seen),
     null,
-    "生之执还有落点能走出新局面（只是占比居中、回合未满），不该被判走投无路",
+    "同一个局面上两个角色的结论必须一致：repeatBlocked 不含角色",
+  );
+});
+
+test("全部组合的后继都已见过时才判 repeatBlocked（占比居中 → 和局）", () => {
+  const b = boardFromRows(blockMesh(2));
+  const seen = new Set<string>([boardKey(b), ...roundSuccessors(b)]);
+  // 占比 36/256 = 0.140625，夹在两条线之间；turn 10 < turnLimit 90
+  assert.deepEqual(
+    classifyTermination(snap(b, 10, []), "life", rules, seen),
+    { reason: "repeatBlocked", winner: null },
+  );
+  assert.deepEqual(
+    classifyTermination(snap(b, 10, []), "death", rules, seen),
+    { reason: "repeatBlocked", winner: null },
+    "回合级的判定不该因为换了个角色就改口",
+  );
+});
+
+test("手写的 seen 也能构造出真卡死：孤零零一个活细胞的下场只有空棋盘", () => {
+  const b = boardFromRows(["#...", "....", "....", "...."]);
+  const dead = boardFromRows(["....", "....", "....", "...."]);
+  // 这一局面的回合后继**只有**空棋盘一种：死之执把唯一的活细胞敲掉、生之执
+  // 在别处补一个，而单个活细胞周围一个邻居都没有，下一代必死。
+  // seen 里这两个 key 都是手写的，没有任何一条来自实现内部的计算公式。
+  const seen = new Set<string>([boardKey(b), boardKey(dead)]);
+  // 占比 1/16 = 0.0625，高于 deathWinRatio(0.05) → 不硬判胜方
+  assert.deepEqual(
+    classifyTermination(snap(b, 10, []), "life", rules, seen),
+    { reason: "repeatBlocked", winner: null },
+  );
+});
+
+test("只要还有一对组合能产生新局面，就不该判 repeatBlocked", () => {
+  const b = boardFromRows(blockMesh(2));
+  // 必须先把「就是原局面」的后继剔掉 —— 它本来就在 seen 里（seen 含当前局面），
+  // 拿它当那个「被漏掉的」等于什么都没漏。实测这个夹具上惰性组合占了很大一部分。
+  const fresh = [...roundSuccessors(b)].filter((k) => k !== boardKey(b));
+  assert.ok(fresh.length > 1, "这个夹具需要至少两种新局面才有意义");
+  // 只漏掉其中一种 —— 只要它还能被某一对组合走出来，就不算推不动
+  const seen = new Set<string>([boardKey(b), ...fresh.slice(1)]);
+  assert.equal(
+    classifyTermination(snap(b, 10, []), "life", rules, seen),
+    null,
+    "漏掉一种新局面都不该判走投无路，何况这里漏的是全部新局面里的一种",
   );
 });
 
 test("repeatBlocked 时同样按占比定胜负 —— 占比越界则判该方胜", () => {
-  // 15/16 活，占比 0.9375 ≥ lifeWinRatio。生之执只剩 1 格可翻，
-  // 而它的后继已经见过 —— 这时不该因为「防抖未满」判和局，规则第 2 条直接按占比定胜负。
+  // 15/16 活，占比 0.9375 ≥ lifeWinRatio。生之执只剩 1 格可翻、
+  // 回合也已经推不动了 —— 这时不该因为「防抖未满」判和局，规则第 2 条直接按占比定胜负。
   const b = boardFromRows(["####", "####", "####", "###."]);
-  const seen = new Set([boardKey(b), ...successorsOf(b, "life")]);
+  const seen = new Set<string>([boardKey(b), ...roundSuccessors(b)]);
   // 序列 = [0.9, 0.9375] → 连续 2 < lifeStreak(3)，胜负线这一条确实没越
   assert.deepEqual(
     classifyTermination(snap(b, 10, [0.9]), "life", rules, seen),
@@ -267,7 +357,7 @@ test("repeatBlocked 时同样按占比定胜负 —— 占比越界则判该方�
 });
 
 test("终局判定不改动入参", () => {
-  const b = stuckBoard();
+  const b = boardFromRows([".##.", ".##.", "....", "...."]);
   const ratios = [0.25, 0.25];
   const before = Array.from(b.cells);
   classifyTermination(snap(b, 10, ratios), "life", rules, new Set<string>());
