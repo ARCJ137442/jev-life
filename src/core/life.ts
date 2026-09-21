@@ -123,6 +123,11 @@ export function legalCells(b: Board, role: Role): Cell[] {
  * 一个错的对齐会在两处同时出现，差分测试就永远抓不到它。
  * jev-2048 的差分测试用的就是这个手法（engine.test.ts 的 reference()）。
  *
+ * 它现在多了一层约束：**差分测试把它写死成了基准，所以它不能再改**
+ * （改它就等于同时改了「被测对象」和「量尺」）。T6 因此把生产实现
+ * `lifeStep` 写成另一份独立代码，而不是让 lifeStep 直接等于它 ——
+ * 详见 lifeStep 的注释。
+ *
  * 规则（B3/S23）：
  *   死细胞周围恰好 3 个活细胞 → 诞生
  *   活细胞周围 2 或 3 个活细胞 → 存活
@@ -159,14 +164,25 @@ export function referenceStep(b: Board, topo: Topology): Board {
 /**
  * 位并行的 B3/S23（每格占 4 bit，整行打包进一个 BigInt）。
  *
- * 为什么是 4 bit：一个格子最多有 8 个活邻居，8 = 0b1000 需要 4 位才放得下，
+ * 每格 4 bit 的理由：一个格子最多有 8 个活邻居，8 = 0b1000 需要 4 位才放得下，
  * 这样 8 个邻居直接**相加**就不会进位串到隔壁格子 —— 位平面因此能一次算完整行。
  *
- * 为什么选位并行：torus 的水平环绕在位表示下就是一次循环移位，
- * 朴素实现则要为每个边界格子写分支。
- * （它在这个棋盘尺寸下未必更快 —— 见 T6 的基准测试，由数据说话。）
+ * ═══ 它现在不对外使用，是被实测淘汰下来的 ═══
+ *
+ * 设计计划初稿认定「lifeStep 用位并行」，理由是 torus 的水平环绕在位上
+ * 就是一次循环移位、拓扑更清晰。但**那是一条可读性论据，不是性能论据** ——
+ * 实测（tools/bench-step.ts，2026-09-21）显示它在全部三档预设尺寸上都更慢：
+ * 相对 referenceStep，4×4 慢 4.6–5.0×、8×8 慢 2.2–2.8×、16×16 慢 1.3–2.4×，
+ * 而且放大到 128×128 也没有反超的迹象。原因见那个文件的表：每步约 750 次
+ * BigInt 运算，对小整数运算慢一到两个数量级。
+ *
+ * **保留而不删**的理由有两条，都与性能无关：
+ *   1. torus 的水平环绕在这里确实是一次循环移位 —— 相同拓扑下两份实现
+ *      互相比对，能抓出「环绕方向写反」这类错（差分测试的另一条腿）
+ *   2. 将来若真把棋盘放大到几百格，反超点在哪目前**没有实测依据**，
+ *      留着一份可以随时拿 tools/bench-step.ts --sizes= 复测
  */
-export function lifeStep(b: Board, topo: Topology): Board {
+export function bitwiseStep(b: Board, topo: Topology): Board {
   const { cols, rows, cells } = b;
   const width = BigInt(4 * cols);
   const FRAME = (1n << width) - 1n;
@@ -243,4 +259,89 @@ export function lifeStep(b: Board, topo: Topology): Board {
   }
 
   return { cols, rows, cells: out };
+}
+
+/**
+ * 生产实现：B3/S23 的朴素算法。
+ *
+ * ═══ 为什么是朴素而不是位并行 ═══
+ *
+ * 实测说了算（tools/bench-step.ts，2026-09-21）：位并行在三档预设尺寸上
+ * 全部更慢，相对 referenceStep，8×8 慢 2.2–2.8×、16×16 慢 1.3–2.4×。
+ * 完整表格与「什么条件下该重新审视」见 DESIGN.md。**这是一条被数据推翻的
+ * 直觉** —— 计划初稿认定位并行更快，理由是它拓扑更清晰；事实证明清晰是真的、
+ * 快是假的。
+ *
+ * ═══ 为什么它和 referenceStep 写得不一样 ═══
+ *
+ * `referenceStep` 是差分测试的基准，**测试文件不允许改**（T6 的约束），
+ * 所以它必须保持原样。于是这里不能直接 `export const lifeStep = referenceStep`
+ * —— 那样差分测试就变成了「拿一个函数和它自己比」，永远不可能失败，
+ * 一条不可能失败的测试等于没有测试。
+ *
+ * 所以这里是同一算法的**另一份独立写法**，刻意与 referenceStep 走不同的路：
+ *   - 邻居数按「行 × 三个来源行」累加到 counts，最后统一套规则；
+ *     referenceStep 是逐格扫 3×3 邻域
+ *   - 取模只在每行的三个来源行上做一次，内层循环里没有任何取模；
+ *     referenceStep 对**每个邻居**都取模
+ *   - 水平环绕用两个显式分支（c-1 < 0 / c+1 >= cols）处理
+ *
+ * 两者思路不同，才不会共享同一个思维错误。jev-2048 的差分测试用的就是
+ * 这个手法（engine.test.ts 的 reference()）。
+ *
+ * 规则（B3/S23）：
+ *   死细胞周围恰好 3 个活细胞 → 诞生
+ *   活细胞周围 2 或 3 个活细胞 → 存活
+ *   其余 → 死亡
+ */
+export function lifeStep(b: Board, topo: Topology): Board {
+  const { cols, rows, cells } = b;
+
+  /* 第一步：把每格的活邻居数累加到 counts。
+     注意行数下限是 MIN_SIZE = 4 —— torus 下 rows < 3 时「上一行」与
+     「下一行」会折回同一行，同一批细胞被重复计数。这正是 types.ts 里
+     MIN_SIZE 取 4 而不是 1 的原因。 */
+  const counts = new Uint8Array(cols * rows);
+
+  for (let r = 0; r < rows; r++) {
+    const base = r * cols;
+
+    // 邻居来自上、中、下三行。bounded 下界外的整行直接跳过
+    for (let dr = -1; dr <= 1; dr++) {
+      const raw = r + dr;
+      let sr: number;
+      if (topo === "torus") {
+        sr = (raw + rows) % rows;
+      } else if (raw < 0 || raw >= rows) {
+        continue; // bounded：界外那整行视为死，一个邻居都不贡献
+      } else {
+        sr = raw;
+      }
+      const sBase = sr * cols;
+
+      for (let c = 0; c < cols; c++) {
+        if (cells[sBase + c] === 0) continue;
+
+        // 正上 / 正下。同一行（dr=0）时不能自计，否则每格给自己 +1
+        if (dr !== 0) counts[base + c]++;
+
+        // 左邻右舍：越界时 bounded 不算、torus 折回另一端
+        if (c > 0) counts[base + c - 1]++;
+        else if (topo === "torus") counts[base + cols - 1]++;
+
+        if (c < cols - 1) counts[base + c + 1]++;
+        else if (topo === "torus") counts[base]++;
+      }
+    }
+  }
+
+  /* 第二步：统一套规则。拆成两步而不是边算边判，是因为规则只依赖
+     「邻居总数」这一个量，而 counts 的累加与规则完全无关 —— 分开写，
+     规则那一行读起来就是 B3/S23 的定义本身。 */
+  const next = new Uint8Array(cols * rows);
+  for (let i = 0; i < cells.length; i++) {
+    const n = counts[i];
+    next[i] = cells[i] ? (n === 2 || n === 3 ? 1 : 0) : n === 3 ? 1 : 0;
+  }
+  return { cols, rows, cells: next };
 }
