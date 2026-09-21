@@ -124,6 +124,8 @@ src/server/server.ts     ✓ 静态托管的**占位实现**（T12 换成带密�
 src/test/                ✓ 8 个测试文件，100 条用例
 tools/                   ✓ _load / bench-step / check-dom / scan-secrets / scan / seal-key
 docs/plans/              ✓ 执行计划（M1 全部任务）
+docs/ui-spec.md          ✓ UI 规格（T14–T15 的定稿）
+docs/llm-backends.md     ✓ LLM 后端规格（**文档先行**，等时机到了再交给 subagent 实现）
 ```
 
 ### ⚠ T12 必须做的一次搬迁
