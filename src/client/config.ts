@@ -21,9 +21,10 @@
  */
 import type { GameRules, Role, Topology } from "../core/types.js";
 import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
-// 只借它的**类型**：能力表（谁收哪些档位）住在 broker 里，界面不另抄一份
-// —— 抄一份的话，往能力表里加一个上游时界面会照旧标注「不支持」
-import type { LlmReasoningEffort } from "../shared/llm-broker.js";
+// 能力表（谁收哪些档位）住在 broker 里，界面**不另抄一份** —— 抄一份的话，
+// 往能力表里加一个上游时界面会照旧标注「不支持」。`clampEffort` 因此是
+// **运行期**依赖，不只是类型。
+import { clampEffort, type LlmReasoningEffort } from "../shared/llm-broker.js";
 import type { Channel } from "../core/channels.js";
 import type { Strategy } from "../core/decide.js";
 import type { BackendId } from "./api.js";
@@ -508,6 +509,98 @@ function readRole(raw: unknown): RoleSettings {
     effort: isEffort(raw.effort) ? raw.effort : "",
     callPolicy: raw.callPolicy === "tool" ? "tool" : "json",
   };
+}
+
+/**
+ * 三个思考控件的**耦合**，写成一个纯函数而不是散在事件回调里。
+ *
+ * 判据（ui-spec 第五节「两个思考控件的耦合」，用户定）：
+ *
+ *   - 「是否允许思考」选**否** → 强度置灰显示 `none`
+ *   - 强度选 **`none`** → 「是否允许思考」自动显示**否**
+ *   - 两者任一落到 `none` → 思维链开关也显示**关**（它们是同一件事的三种说法）
+ *   - 反过来：开了思维链、或把强度拨到别的档位 → 「否」自动解除
+ *
+ * 三处状态说的是同一件事，所以必须有一个**唯一**的地方把它们对齐 —— 散在
+ * 三个 `onchange` 里迟早会漏掉一条（症状是界面显示「允许思考：否」而思维链
+ * 是开的，而下发时按哪一条算只有看代码才知道）。
+ *
+ * @param changed 刚被动的是哪一个。**双向耦合必须知道方向**：把「否」翻成
+ *                「是」与把强度从 `none` 拨开，要做的事情不一样
+ */
+export function coupleLlmSettings(
+  s: RoleSettings,
+  changed: "cot" | "allow" | "effort",
+): RoleSettings {
+  const out: RoleSettings = { ...s };
+
+  if (changed === "cot") {
+    if (!out.chainOfThought) {
+      // 关掉思维链 = 明确不想让它想。强度跟着回到「留空」（下次开起来还是
+      // 用户上一轮选的样子），「是否允许思考」也回到留空
+      out.effort = "";
+      out.allowThinking = "";
+    } else if (out.allowThinking === "no" || out.effort === "none") {
+      // 打开思维链 = 允许它想。原先那些「不许想」的表达要一并解除
+      out.allowThinking = "";
+      if (out.effort === "none") out.effort = "";
+    }
+    return out;
+  }
+
+  if (changed === "allow") {
+    if (out.allowThinking === "no") {
+      out.effort = "none";
+      out.chainOfThought = false;
+    } else if (out.allowThinking === "yes") {
+      out.chainOfThought = true;
+      if (out.effort === "none") out.effort = "";
+    }
+    // 选「留空」时**不动另外两个**：留空是「不说」，不该顺手改掉已经说过的
+    return out;
+  }
+
+  // changed === "effort"
+  if (out.effort === "none") {
+    out.allowThinking = "no";
+    out.chainOfThought = false;
+  } else if (out.effort !== "") {
+    out.allowThinking = "";
+    out.chainOfThought = true;
+  }
+  return out;
+}
+
+/**
+ * 三个思考控件 → **一个**期望下发的思考强度。
+ *
+ * `null` 表示**明确要求「不发这个字段」**（用上游自己的默认），与
+ * 「客户端没意见」是两回事 —— 后者在这个界面上不存在，因为开关永远有值。
+ * 见 `shared/backend.ts` 的 `LlmCallOptions.effort`。
+ *
+ * 优先级：思维链关（一票否决）→ 「是否允许思考 = 否」→ 强度档位 → 留空。
+ * 前三者最终都落到 `none`，与实测口径一致（`none` 与「留空」同为 3/3，
+ * 四个显式档位全部劣于不设）。
+ */
+export function desiredEffort(s: RoleSettings): LlmReasoningEffort | null {
+  if (!s.chainOfThought) return "none";
+  if (s.allowThinking === "no") return "none";
+  if (s.effort === "none") return "none";
+  if (s.effort !== "") return s.effort;
+  return null;
+}
+
+/**
+ * 期望的档位到了这条上游手里会不会被丢掉。
+ *
+ * 界面据此标注「该后端不支持，已降级为默认」—— **在下发之前**就说，
+ * 而不是等一个 400 回来再解释（那时报错离原因已经很远）。
+ *
+ * `null`（留空）不算降级：那本来就是「不发这个字段」。
+ */
+export function effortDegraded(s: RoleSettings, upstream: string): boolean {
+  const want = desiredEffort(s);
+  return want !== null && clampEffort(want, upstream) === undefined;
 }
 
 /** 认得出的思考强度档位。与 `llm-broker` 的并集同源，但**在运行时**校验 */

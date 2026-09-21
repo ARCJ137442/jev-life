@@ -510,3 +510,44 @@ test("DEFAULT_RETRY 是有限次 —— 无限重试不该是默认值", () => {
   assert.ok(DEFAULT_RETRY.max !== null && DEFAULT_RETRY.max > 0);
   assert.ok(DEFAULT_RETRY.baseMs > 0);
 });
+
+/* ══════════════════════════════════════════════════════════════════
+   六、LLM 调用配置跟着**请求体**走
+   ══════════════════════════════════════════════════════════════════
+   翻译（Jev 形状 → LLM 形状）发生在服务端，而出题目的客户端才知道用户在界面上
+   选了什么 —— 所以这四个控件的取值必须跟着请求体走一趟。这一段钉的就是那条路：
+   它断了不会报错，只会让四个控件看起来「设了没用」。 */
+
+test("★ LLM 后端：llm 字段进请求体；三态原样透传", async () => {
+  for (const effort of ["none", "high", null] as const) {
+    const { fetch, calls } = scripted(ok(ANSWERS));
+    await callJev(DIRECT, {}, QUESTIONS, { retry: FAST, fetchImpl: fetch, llm: { effort } });
+    assert.deepEqual(
+      calls[0].body,
+      { model: DIRECT.model, state: {}, questions: QUESTIONS, llm: { effort } },
+      `effort=${String(effort)} 没有原样送到请求体里`,
+    );
+  }
+});
+
+test("★ 非 LLM 后端：llm 字段**整个不出现**，不是出现一个空对象", async () => {
+  const { fetch, calls } = scripted(ok(ANSWERS));
+  await callJev(DIRECT, {}, QUESTIONS, { retry: FAST, fetchImpl: fetch });
+  assert.deepEqual(calls[0].body, { model: DIRECT.model, state: {}, questions: QUESTIONS });
+  assert.ok(
+    !("llm" in (calls[0].body as Record<string, unknown>)),
+    "没配 LLM 的后端不该多出一个字段 —— 那是在给上游送未知参数",
+  );
+});
+
+test("★ 适配器：请求上的 llm 优先于构造时的 llm（同一后端实例会被不同设置复用）", async () => {
+  const { fetch, calls } = scripted(ok(ANSWERS));
+  const backend = createSystemoneBackend(DIRECT, {
+    id: "llmfree",
+    retry: FAST,
+    fetchImpl: fetch,
+    llm: { effort: "low" },
+  });
+  await backend.evaluate({ model: DIRECT.model, state: {}, questions: QUESTIONS, llm: { effort: "max" } });
+  assert.deepEqual((calls[0].body as { llm: unknown }).llm, { effort: "max" });
+});

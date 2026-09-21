@@ -892,6 +892,66 @@ textarea{resize:vertical}
 
     <div class="note" id="backendNote"></div>
 
+    <!-- ══ LLM 调用配置：**只在选用 LLM 后端时出现**（`isLlm` 判据）══
+         这几个控件描述的是「怎么跟这个模型谈」，而不是「它能不能连上」——
+         所以它们归 API 抽屉（那里本就是「怎么跟模型打交道」），而不是策略。
+         换回 Jev 后端时整块隐藏，但**值照旧持久化**（换回来设置还在）。
+
+         ⚠ 这里送出去的是**语义**，不是最终下发的值：各上游收的档位不一样
+         （实测 agnes 不收 xhigh，直接发会把整个请求打成 400）。收敛在服务端
+         按能力表做，界面只负责在**下发之前**把「这条后端收不了、已降级」
+         说出来。 -->
+    <div id="llmCfg" style="display:none">
+      <div class="divider"></div>
+      <div class="section-head">
+        <span class="sec-title" data-i18n="api.llmTitle">LLM 调用配置</span>
+        <span class="sec-note" data-i18n="api.llmNote">只对这一条后端生效；换回别的后端时设置仍然留着。</span>
+      </div>
+
+      <div class="field">
+        <label class="switch">
+          <input type="checkbox" id="inpCot">
+          <span class="track"></span><span class="txt" data-i18n="api.cot">思维链</span>
+        </label>
+        <div class="desc" style="margin-top:8px;margin-bottom:0" data-i18n="api.cotDesc">默认关。实测两个后端都从 0–63% 升到 100%，快 5–40 倍，推理 token 归零 —— 关掉它从结构上消灭了「推理吃光预算」这个失败模式（观察到的唯一失败原因）。</div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="api.allowThink">是否允许思考</label>
+        <select id="inpAllowThink">
+          <option value="" data-i18n="api.allowEmpty">留空（不说）</option>
+          <option value="yes" data-i18n="api.allowYes">是</option>
+          <option value="no" data-i18n="api.allowNo">否</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label data-i18n="api.effort">思考强度</label>
+        <select id="inpEffort">
+          <option value="" data-i18n="api.effortEmpty">默认（留空）</option>
+          <option value="none" data-i18n="api.effortNone">无 none</option>
+          <option value="low" data-i18n="api.effortLow">低 low</option>
+          <option value="medium" data-i18n="api.effortMedium">中 medium</option>
+          <option value="high" data-i18n="api.effortHigh">高 high</option>
+          <option value="xhigh" data-i18n="api.effortXhigh">超高 xhigh</option>
+          <option value="max" data-i18n="api.effortMax">最强 max</option>
+        </select>
+        <!-- ★ 这条实测结论必须与控件同屏：四个显式档位全部劣于不设，
+             不写出来就等于让人以为「多想一点」是免费的 -->
+        <div class="warnline" id="effortWarn" data-i18n="api.effortWarn" style="display:block"></div>
+        <div class="desc" id="effortNote" style="margin-top:6px;margin-bottom:0"></div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="api.callPolicy">调用策略</label>
+        <select id="inpCallPolicy">
+          <option value="json" data-i18n="api.policyJson">JSON 输出</option>
+          <option value="tool" data-i18n="api.policyTool">工具循环</option>
+        </select>
+        <div class="tinylbl" data-i18n="api.callPolicyNote">JSON 靠提示词约束形状、一次调用（实测快 2–4 倍）；工具循环靠 schema 强制形状、可多轮。两条都留着是因为**它本身就是可对照的变量**。</div>
+      </div>
+    </div>
+
     <div class="syncrow">
       <button id="bApiSync" data-i18n-title="strategy.syncTitle">复制到另一方</button>
     </div>

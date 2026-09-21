@@ -16,6 +16,10 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_DUEL,
   clampOpeningId,
+  coupleLlmSettings,
+  defaultRole,
+  desiredEffort,
+  effortDegraded,
   clampRatio,
   clampSize,
   clampStreak,
@@ -23,6 +27,7 @@ import {
   presetFor,
   presetRulesFor,
 } from "../client/config.js";
+import { clampEffort } from "../shared/llm-broker.js";
 import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
 import { PRESETS } from "../core/presets.js";
 
@@ -145,4 +150,108 @@ test("★ 预设的胜负线是出厂值的来源，且 4×4 与 8×8 **不共�
   assert.equal(DEFAULT_DUEL.deathWinRatio, r8.deathWinRatio);
   assert.equal(DEFAULT_DUEL.lifeStreak, r8.lifeStreak);
   assert.equal(DEFAULT_DUEL.deathStreak, r8.deathStreak);
+});
+
+/* ═══════════ LLM 三个思考控件的耦合与归一 ═══════════ */
+
+/** 一份干净的玩家级设置，只覆盖关心的三个字段 */
+function llm(patch: {
+  chainOfThought?: boolean;
+  allowThinking?: "" | "yes" | "no";
+  effort?: "" | "none" | "low" | "medium" | "high" | "xhigh" | "max";
+}) {
+  return { ...defaultRole(), ...patch };
+}
+
+test("★ desiredEffort 的优先级：思维链关是一票否决", () => {
+  // 出厂默认：思维链关 → 明确要 none（实测 3/3，且从结构上消灭了
+  // 「推理吃光预算」这个失败模式）
+  assert.equal(desiredEffort(defaultRole()), "none");
+
+  // 就算强度被设成 high，思维链关着仍然是 none —— 否则界面上「思维链：关」
+  // 与实际下发的东西对不上
+  assert.equal(desiredEffort(llm({ chainOfThought: false, effort: "high" })), "none");
+  assert.equal(desiredEffort(llm({ chainOfThought: false, allowThinking: "yes" })), "none");
+
+  // 「是否允许思考 = 否」与 `none` 说的是同一件事
+  assert.equal(desiredEffort(llm({ chainOfThought: true, allowThinking: "no" })), "none");
+  assert.equal(desiredEffort(llm({ chainOfThought: true, effort: "none" })), "none");
+
+  // 显式档位只经**期望**，收敛留给服务端的能力表
+  assert.equal(desiredEffort(llm({ chainOfThought: true, effort: "xhigh" })), "xhigh");
+  assert.equal(desiredEffort(llm({ chainOfThought: true, effort: "high" })), "high");
+
+  // ★ 留空 = **明确要求「不发这个字段」**，而不是「客户端没意见」。
+  //   实测留空与 none 同为 3/3，而四个显式档位全劣 —— 这个选项必须送得出去
+  assert.equal(
+    desiredEffort(llm({ chainOfThought: true, effort: "", allowThinking: "" })),
+    null,
+  );
+});
+
+test("★ 三处状态说的是同一件事，耦合函数把它们对齐（三个方向各管各的）", () => {
+  // 强度选 none → 「是否允许思考」显示否、思维链显示关
+  let s = coupleLlmSettings(llm({ chainOfThought: true, effort: "none" }), "effort");
+  assert.equal(s.allowThinking, "no");
+  assert.equal(s.chainOfThought, false);
+
+  // 强度拨到别的档位 → 「否」自动解除、思维链打开
+  s = coupleLlmSettings(llm({ chainOfThought: false, allowThinking: "no", effort: "none" }), "effort");
+  s.effort = "high";
+  s = coupleLlmSettings(s, "effort");
+  assert.equal(s.allowThinking, "", "拨到显式档位之后「否」应当自动解除");
+  assert.equal(s.chainOfThought, true);
+
+  // 「是否允许思考 = 否」→ 强度落到 none
+  s = coupleLlmSettings(llm({ chainOfThought: true, effort: "high" }), "allow");
+  s.allowThinking = "no";
+  s = coupleLlmSettings(s, "allow");
+  assert.equal(s.effort, "none");
+  assert.equal(s.chainOfThought, false);
+
+  // 「是否允许思考 = 是」→ 思维链打开，并把原先的 none 解除
+  s = coupleLlmSettings(llm({ chainOfThought: false, allowThinking: "no", effort: "none" }), "allow");
+  s.allowThinking = "yes";
+  s = coupleLlmSettings(s, "allow");
+  assert.equal(s.chainOfThought, true);
+  assert.equal(s.effort, "", "「是」要解除 none，否则状态自相矛盾");
+
+  // 「留空」是「不说」，不该顺手改掉已经说过的
+  s = coupleLlmSettings(llm({ chainOfThought: true, effort: "high" }), "allow");
+  s.allowThinking = "";
+  s = coupleLlmSettings(s, "allow");
+  assert.equal(s.effort, "high", "留空不该把用户已经选好的档位清掉");
+  assert.equal(s.chainOfThought, true);
+
+  // 关思维链 → 强度与「是否允许思考」一起回到留空
+  s = coupleLlmSettings(llm({ chainOfThought: true, effort: "high", allowThinking: "yes" }), "cot");
+  s.chainOfThought = false;
+  s = coupleLlmSettings(s, "cot");
+  assert.equal(s.effort, "");
+  assert.equal(s.allowThinking, "");
+  assert.equal(desiredEffort(s), "none", "关掉之后下发的一定是 none");
+
+  // 打开思维链 → 原先那些「不许想」的表达一并解除
+  s = coupleLlmSettings(llm({ chainOfThought: false, allowThinking: "no", effort: "none" }), "cot");
+  s.chainOfThought = true;
+  s = coupleLlmSettings(s, "cot");
+  assert.equal(s.allowThinking, "");
+  assert.equal(s.effort, "");
+  assert.equal(desiredEffort(s), null, "开思维链 + 留空 = 用上游默认，不是 none");
+});
+
+test("★ 降级提示：收不了的档位要在下发**之前**就说出来", () => {
+  // 实测 agnes 的合法值是 none|low|medium|high|max，**没有 xhigh**
+  assert.equal(effortDegraded(llm({ chainOfThought: true, effort: "xhigh" }), "agnes"), true);
+  assert.equal(effortDegraded(llm({ chainOfThought: true, effort: "high" }), "agnes"), false);
+  // 「留空」不算降级：那本来就是「不发这个字段」
+  assert.equal(effortDegraded(llm({ chainOfThought: true, effort: "" }), "agnes"), false);
+  // 不认识的上游：整个字段不发，那是保守的默认而不是「降级」
+  assert.equal(effortDegraded(llm({ chainOfThought: true, effort: "high" }), "没见过的上游"), true);
+});
+
+test("clampEffort 与界面的期望一致：收不了就不发，且不改语义", () => {
+  assert.equal(clampEffort("xhigh", "agnes"), undefined);
+  assert.equal(clampEffort("max", "agnes"), "max");
+  assert.equal(clampEffort("max", "没见过的上游"), undefined);
 });
