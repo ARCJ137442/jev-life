@@ -115,11 +115,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "decision.idle": "尚未开始",
     "decision.restored": "已恢复上一局（第 {n} 回合）",
     "decision.top5": "概率前 5",
-    "decision.noDist": "（这一回合没有可读的概率分布）",
     "decision.flip": "翻 ({row}, {col})",
 
     /* ---------- 游戏抽屉 ---------- */
-    "game.title": "游戏",
     "game.noteInput":
       "与 2048 相反：生命棋的规则不自明，所以这里的每一项都会写进发给 Jev 的 state —— 改完之后概率分布**应当**变化；若没变，那才是 bug。",
     "game.desc":
@@ -146,7 +144,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.done": "完成",
 
     /* ---------- 策略抽屉 ---------- */
-    "strategy.title": "策略",
     "strategy.desc":
       "分两部分：上下文决定 Jev 看到什么，规则决定拿到答案后怎么落实。每一项都是**玩家级**的 —— 两边可以配得不一样。",
     "strategy.perRoleNote":
@@ -190,7 +187,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "strategy.done": "完成",
 
     /* ---------- API 抽屉 ---------- */
-    "api.title": "API",
     "api.desc":
       "怎么跟模型打交道：**选谁**（后端 / 模型 / 密钥）与**怎么谈**（重试、超时）。两者都影响 AI 玩家的表现，所以都在这一个抽屉里。",
     "api.keySafety": "密钥安全",
@@ -244,7 +240,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.currentTitle": "当前后端：{label} · {model}",
     "backend.currentTitleShort": "当前后端：{label}",
     "backend.remoteSuffix": "{label}（远端）",
-    "backend.needConfig": "未选择后端",
 
     /* ---------- 页脚与状态 ---------- */
     "stats.total": "累计",
@@ -275,8 +270,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "over.failBodyInf": "{msg}",
     "over.retry": "重试这一回合",
     "over.skip": "跳过这一回合，继续",
-    "over.quotaBody": "额度不足：{msg}",
-    "over.failedTurn": "第 {n} 回合没有跑成",
     "over.backendTitle": "这条后端在当前部署下走不通",
     "over.goApi": "去设置后端",
     "over.halt": "暂停对局",
@@ -306,7 +299,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "log.desc": "每个回合一条：双方各自的请求体与回包。按回合折叠，展开看完整 JSON。",
     "log.empty": "还没有请求记录",
     "log.turnCount": "{n} 回合",
-    "log.reason": "原因",
     "log.copyReq": "复制请求",
     "log.copyRes": "复制响应",
     "log.copyBoth": "复制两者",
@@ -318,13 +310,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "log.copyAll": "复制全部",
     "log.clear": "清空",
     "log.clearTitle": "清空全部调用日志（不可撤销）",
-    "log.done": "完成",
-    "log.at": "落点",
     "log.p": "p",
     "log.calls": "上游 {n} 次",
     "log.roleLife": "生之执",
     "log.roleDeath": "死之执",
-    "log.roleBoth": "双方",
     "log.noPayload": "（这一条是从存档恢复的，请求体没有随存档保留）",
     "log.costUnknown": "成本未知",
 
@@ -389,10 +378,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "sesserr.notChess": "这份存档不属于生命棋（缺 app 标识或标识不符）",
 
     /* ---------- 抢救结果 ---------- */
-    "salv.board": "棋盘尺寸按当前设置补齐",
     "salv.turn": "回合数归零",
     "salv.memory": "记忆已清空",
-    "salv.log": "调用日志已清空",
     "salv.rawGone": "原始数据已经不在了",
     "salv.exported": "旧数据已导出",
     "salv.forceFail": "这份数据连棋盘都救不回来",
@@ -414,7 +401,6 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- 字段名与档案类型 ---------- */
     "field.gameSettings": "对局设置",
-    "field.context": "上下文",
     "field.apiSettings": "API 设置",
     "field.session": "对局",
     "field.roles": "双方玩家设置",
@@ -454,7 +440,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "dev.bootFail": "[生命棋×Jev] 启动失败：",
     "dev.bootInfo":
       "[生命棋×Jev] {cols}×{rows} {topology} 开局 {opening} 回合上限 {turnLimit} 通道 {channel}",
-    "dev.memMax": "最大",
   },
 
   en: {
@@ -518,11 +503,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     "decision.idle": "Not started yet",
     "decision.restored": "Restored from the previous game (turn {n})",
     "decision.top5": "Top 5 probabilities",
-    "decision.noDist": "(no readable probability distribution this turn)",
     "decision.flip": "flip ({row}, {col})",
 
     /* ---------- Game drawer ---------- */
-    "game.title": "Game",
     "game.noteInput":
       "The opposite of 2048: in Life Chess the rules are not self-evident, so everything here is written into the state sent to Jev — after a change the probability distribution *should* change; if it does not, that is the bug.",
     "game.desc":
@@ -549,7 +532,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.done": "Done",
 
     /* ---------- Strategy drawer ---------- */
-    "strategy.title": "Strategy",
     "strategy.desc":
       "Two parts: context decides what Jev sees, rules decide what happens to its answer. Everything here is player-level — the two sides may differ.",
     "strategy.perRoleNote":
@@ -593,7 +575,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "strategy.done": "Done",
 
     /* ---------- API drawer ---------- */
-    "api.title": "API",
     "api.desc":
       "How to talk to the model: who to talk to (backend / model / key) and how (retries, timeouts). Both change how the AI player performs, so both live in this drawer.",
     "api.keySafety": "Key safety",
@@ -647,7 +628,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.currentTitle": "Current backend: {label} · {model}",
     "backend.currentTitleShort": "Current backend: {label}",
     "backend.remoteSuffix": "{label} (remote)",
-    "backend.needConfig": "No backend selected",
 
     /* ---------- Footer and status ---------- */
     "stats.total": "Total",
@@ -678,8 +658,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "over.failBodyInf": "{msg}",
     "over.retry": "Retry this turn",
     "over.skip": "Skip this turn and continue",
-    "over.quotaBody": "Out of quota: {msg}",
-    "over.failedTurn": "Turn {n} did not complete",
     "over.backendTitle": "This backend cannot work in this deployment",
     "over.goApi": "Go configure a backend",
     "over.halt": "Pause the game",
@@ -709,7 +687,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "log.desc": "One entry per turn: both sides' request and response. Collapsed by turn; expand for the full JSON.",
     "log.empty": "No calls recorded yet",
     "log.turnCount": "{n} turns",
-    "log.reason": "Reason",
     "log.copyReq": "Copy request",
     "log.copyRes": "Copy response",
     "log.copyBoth": "Copy both",
@@ -721,13 +698,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     "log.copyAll": "Copy all",
     "log.clear": "Clear",
     "log.clearTitle": "Clear the whole call log (cannot be undone)",
-    "log.done": "Done",
-    "log.at": "Cell",
     "log.p": "p",
     "log.calls": "{n} upstream",
     "log.roleLife": "Life",
     "log.roleDeath": "Death",
-    "log.roleBoth": "Both",
     "log.noPayload": "(restored from an archive; request bodies were not kept)",
     "log.costUnknown": "cost unknown",
 
@@ -792,10 +766,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "sesserr.notChess": "This archive does not belong to Life Chess (missing or wrong app marker)",
 
     /* ---------- Salvage ---------- */
-    "salv.board": "Board size filled in from the current settings",
     "salv.turn": "Turn count reset to zero",
     "salv.memory": "Memory cleared",
-    "salv.log": "Call log cleared",
     "salv.rawGone": "The raw data is gone",
     "salv.exported": "Old data exported",
     "salv.forceFail": "Not even the board could be salvaged",
@@ -817,7 +789,6 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- Field and archive kind names ---------- */
     "field.gameSettings": "game settings",
-    "field.context": "context",
     "field.apiSettings": "API settings",
     "field.session": "game",
     "field.roles": "both players' settings",
@@ -857,7 +828,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     "dev.bootFail": "[Life×Jev] Startup failed:",
     "dev.bootInfo":
       "[Life×Jev] {cols}×{rows} {topology} opening {opening} turn limit {turnLimit} channel {channel}",
-    "dev.memMax": "max",
   },
 };
 
