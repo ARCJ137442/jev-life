@@ -27,7 +27,55 @@
  * 实现能同时供浏览器（`client/api.ts`）与无头 CLI（`tools/play.ts`）使用。
  */
 import type { Answer, JevResponse, Questions } from "./types.js";
-import type { LlmReasoningEffort } from "./llm-broker.js";
+import {
+  BrokerError,
+  answersFromToolArguments,
+  answersFromToolInput,
+  anthropicAssistantMessage,
+  anthropicToolResultMessage,
+  anthropicUsageOf,
+  assistantToolCallsMessage,
+  buildAnthropicToolRequest,
+  buildToolRequest,
+  extractAnthropicContent,
+  extractAnthropicToolCalls,
+  extractContent,
+  extractToolCalls,
+  fromLlmContent,
+  llmEndpoint,
+  toAnthropicRequest,
+  toLlmRequest,
+  toolResultMessage,
+  usageOf,
+} from "./llm-broker.js";
+import type {
+  AnthropicMessage,
+  LlmMessage,
+  LlmProtocol,
+  LlmReasoningEffort,
+  LlmUsage,
+} from "./llm-broker.js";
+
+/** 两个 broker 的形状不一样，但发消息、取 usage、取正文这三件事的**位置**一样 */
+function isAnthropicProtocol(p: LlmProtocol): boolean {
+  return p === "anthropic";
+}
+
+/**
+ * CORS 那一段提示。
+ *
+ * ★ **为什么非有不可**：浏览器直连供应商被跨域拦下时，JS 里只会拿到一个
+ * `TypeError: Failed to fetch` —— 与「模型没答」在代码里长得一模一样。
+ * 不点破的话，用户看到「无法连接」会去调提示词、换模型，而真正要做的是
+ * 换一个允许浏览器调用的网关。**症状与原因无关**，正是这个项目反复出现的母题。
+ *
+ * 光靠 JS 是**读不出**「到底是不是 CORS」的（浏览器刻意不告诉脚本），
+ * 所以文案写成「可能是」并给出验证方法，而不是断言。
+ */
+const CORS_HINT =
+  "（可能是跨域被拦：浏览器直连第三方网关时，对方必须回 Access-Control-Allow-Origin，" +
+  "否则请求根本发不出去。这与「模型没答」不是一回事 —— 请求没到对面那里。" +
+  "请在浏览器 DevTools 的 Console 里确认有没有 CORS 报错。）";
 
 /* ══════════════════════════════════════════════════════════════════
    形状
@@ -447,11 +495,39 @@ export async function callJev(
   questions: Questions,
   opts: CallOptions = {},
 ): Promise<DecisionResult> {
-  const retry = opts.retry ?? DEFAULT_RETRY;
   const timeoutMs = opts.timeoutMs ?? cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const model = opts.model ?? cfg.model;
   const fetchImpl = opts.fetchImpl ?? ((url, init) => fetch(url, init));
 
+  return runWithRetry(opts.retry ?? DEFAULT_RETRY, opts.hooks, async () => {
+    const r = await callOnce(cfg, state, questions, fetchImpl, timeoutMs, model, opts.llm);
+    return { value: r, upstreamCalls: r.upstreamCalls };
+  });
+}
+
+/** 一次「尝试」的产物：结果本身，外加它内部发了几次上游请求 */
+interface Attempt {
+  readonly value: DecisionResult;
+  readonly upstreamCalls: number;
+}
+
+/**
+ * 重试与计时的**唯一一份**实现。
+ *
+ * ★ 抽出来是因为第二条路（`createLlmBackend`）需要**一模一样**的重试语义与
+ * `upstreamCalls` 记账。各写一份，症状是「换个后端，`upstreamCalls` 的算法就
+ * 变了」—— 而那个数字正是「Jev 的并行决策值多少钱」那份测量的分母，
+ * 两套算法算出来的东西不可比，而且**看起来都挺对**。
+ *
+ * ⚠ 只认 `JevError`。别的错误（包括 broker 的 `BrokerError`）一律当成
+ * **不可重试** —— 所以调用方必须先把它们翻译成 `JevError`，见
+ * `createLlmBackend` 里的 `asJevError`。
+ */
+async function runWithRetry(
+  retry: RetryPolicy,
+  hooks: CallHooks | undefined,
+  attemptFn: () => Promise<Attempt>,
+): Promise<DecisionResult> {
   // 计时从**第一次请求之前**开始：要测的是「这个后端给出一次决策要多久」，
   // 含重试与退避等待 —— 那正是用户实际感受到的墙钟时间
   const startedAt = Date.now();
@@ -460,12 +536,12 @@ export async function callJev(
 
   for (;;) {
     try {
-      const r = await callOnce(cfg, state, questions, fetchImpl, timeoutMs, model, opts.llm);
+      const r = await attemptFn();
       // ★ **累加**而不是自增：一次「尝试」内部可能就发了 N 次上游请求 ——
       // 工具循环正是如此。这个数字是与 Jev 对比的头条指标，
       // 把它按「我发了一次 HTTP」记成 1，等于把工具循环的成本藏起来
       calls += r.upstreamCalls;
-      return { ...r, latencyMs: Date.now() - startedAt, upstreamCalls: calls };
+      return { ...r.value, latencyMs: Date.now() - startedAt, upstreamCalls: calls };
     } catch (e) {
       // 失败的尝试同样发出去过请求（而且可能发了好几次）。这一层数不到工具
       // 循环内部的次数 —— 只在**成功**的回包里才知道 —— 所以按 1 记。
@@ -477,7 +553,7 @@ export async function callJev(
       if (!canRetry) throw err;
 
       const delay = backoffDelay(attempt, retry.baseMs);
-      opts.hooks?.onRetry?.(attempt + 1, err, delay);
+      hooks?.onRetry?.(attempt + 1, err, delay);
       await sleep(delay);
       attempt++;
     }
@@ -510,6 +586,477 @@ export function createSystemoneBackend(
         llm: req.llm ?? opts.llm,
         hooks: hooks ?? opts.hooks,
       }),
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   用户自备 key 的 LLM 后端（`llm-json` / `llm-tool`）
+   ══════════════════════════════════════════════════════════════════
+
+   ★ **这一条与前一条的架构差别只有一个字：broker 在客户端跑。**
+
+   代管那条（`/api/evaluate3`）走的是「客户端只发 Jev 形状 → **服务端**翻译 →
+   上游」，客户端对两种上游一视同仁。而用户自备 key 的没有那层服务端 ——
+   GitHub Pages 上连 Serverless 都没有 —— 所以翻译必须发生在浏览器里。
+
+   好在 broker 本来就是纯函数（不碰网络、不碰 DOM、不读环境变量），
+   两份实现并没有分叉：**变的是谁来调它，不是它算什么。**
+
+   ⚠ 代价是这里出现了第三个工具循环。`src/server/server.ts` 与
+   `api/_upstream.ts` 各有一份（那两份是给代管后端用的，它们要显式注入密钥、
+   还要把错误映射成对外的 HTTP 状态码，与这里的处境不同）。
+   **三处同源**，改一处记得想想另外两处 —— 漏一处的症状是
+   「本机好用、静态版不对」，而那种差异极难查。
+*/
+
+export interface LlmBackendOptions {
+  /** `DecisionBackend.id`，用来查 `BACKENDS` 表 */
+  readonly id: string;
+  /** 说哪种协议。**决定路径、认证头、请求体形状与回包解析** */
+  readonly protocol: LlmProtocol;
+  /**
+   * 查能力表用的键 —— **这里是协议族**（`openai-compat` / `anthropic-compat`），
+   * 不是厂商。理由见 `llm-broker.ts` 的 `LlmProtocol` 注释。
+   */
+  readonly upstream: string;
+}
+
+/**
+ * 造一个「直连用户自己那个 LLM 端点」的后端。
+ *
+ * 两条调用策略（JSON / 工具循环）走的是同一条路，只在「怎么问」上分岔 ——
+ * 这正是四层架构里「中间那层必须真的兼容」要的效果：上层的 `channels` /
+ * `core/` 分不出对面是一个被包起来的 LLM，还是一个 Jev 协议后端。
+ *
+ * ⚠ **`kind` 在构造时定死**（它属于 `DecisionBackend` 的契约，而契约要求
+ * 统计按配置分组）。所以构造时必须把这次的调用策略传进来 ——
+ * 传成默认的 `json` 会让工具循环的调用被记进 JSON 那一栏，
+ * 而那两个是不同的东西（实测快 2–4 倍），混在一起算平均得到的数字谁也不代表。
+ */
+export function createLlmBackend(
+  cfg: ClientConfig,
+  opts: LlmBackendOptions & CallOptions,
+): DecisionBackend {
+  return {
+    id: opts.id,
+    kind: (opts.llm?.callPolicy ?? "json") === "tool" ? "llm-tool" : "llm-json",
+    evaluate: (req, hooks) =>
+      callLlm(cfg, req, opts, {
+        retry: opts.retry ?? DEFAULT_RETRY,
+        timeoutMs: opts.timeoutMs ?? cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        model: req.model || opts.model || cfg.model,
+        fetchImpl: opts.fetchImpl ?? ((url, init) => fetch(url, init)),
+        // 请求上的配置优先于构造时的配置：同一个后端实例可能被不同玩家级
+        // 设置复用，而「这一次调用怎么谈」是跟着**请求**走的
+        llm: req.llm ?? opts.llm,
+        hooks: hooks ?? opts.hooks,
+      }),
+  };
+}
+
+/** 一次 LLM 调用的全部上下文 —— 参数太多了，捆一个包免得传错顺序 */
+interface LlmCallContext {
+  readonly retry: RetryPolicy;
+  readonly timeoutMs: number;
+  readonly model: string;
+  readonly fetchImpl: FetchLike;
+  readonly llm: LlmCallOptions | undefined;
+  readonly hooks: CallHooks | undefined;
+}
+
+/**
+ * 三态 effort 的**翻译**（`LlmCallOptions.effort` → broker 的 `opts.effort`）。
+ *
+ * ★ 与 `server.ts` / `_upstream.ts` 里那一行是同一件事，措辞也一样：
+ * **字段缺席 = 客户端没意见 → 交给 broker 的默认姿态（`none`）；
+ * 显式 `null` = 明确要求不发这个字段。** 两者必须分开传 ——
+ * 合并成一个值，「思考强度 = 留空」那个选项就永远送不出去，
+ * 而它的症状是「设了跟没设一样」，看起来像开关坏了。
+ */
+function effortArg(llm: LlmCallOptions | undefined): { effort?: LlmReasoningEffort | null } {
+  return llm && "effort" in llm ? { effort: llm.effort ?? null } : {};
+}
+
+/**
+ * 把 broker 的错误翻译成传输层的错误。
+ *
+ * ⚠ **不能不翻译**：`runWithRetry` 只对 `JevError` 看 `retryable`，
+ * 别的错误一律当成不可重试。broker 的「模型没答」是**值得重试**的
+ * （实测是偶发的），直接抛出去会让它变成「一锤子买卖」，
+ * 而症状是「偶尔失败一次就整回合失败」，与重试策略本身无关。
+ */
+function asJevError(e: unknown): unknown {
+  if (e instanceof JevError) return e;
+  if (e instanceof BrokerError) return new JevError(e.message, undefined, e.retryable);
+  return e;
+}
+
+/** 一次 HTTP 回包 —— 只保留本项目要用的三样 */
+interface LlmHttp {
+  readonly payload: unknown;
+  readonly text: string;
+}
+
+/**
+ * 发一次请求并**先看状态码、再看回包**（硬性要求第 1 条）。
+ *
+ * `429` / `5xx` / 认证失败各有各的处置，**绝不能都归到「模型没给出答案」里** ——
+ * 踩过一次：探针没看状态码，于是 429 限流被统计成了「模型答不出来」。
+ * 一个「请求根本没被受理」在统计上表现成了「模型不行」。
+ */
+async function postJson(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  ctx: LlmCallContext,
+  signal: AbortSignal | undefined,
+): Promise<LlmHttp> {
+  let res: Response;
+  try {
+    res = await ctx.fetchImpl(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      ...(signal === undefined ? {} : { signal }),
+    });
+  } catch (e) {
+    // 网络层失败：断网、DNS、TLS、**CORS**、超时 —— 一律可重试。
+    // 超时与「连不上」分开报：前者是上游慢，后者是根本到不了。
+    const aborted = signal?.aborted === true;
+    throw new JevError(
+      aborted
+        ? `请求超时：${ctx.timeoutMs}ms 内没有拿到 ${url} 的响应`
+        : `无法连接 ${url}：${(e as Error).message}。${CORS_HINT}`,
+      undefined,
+      true,
+    );
+  }
+
+  const text = await res.text();
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new JevError(
+      `HTTP ${res.status}，但回包不是 JSON：${text.slice(0, 200)}`,
+      res.status,
+      isRetryableStatus(res.status),
+    );
+  }
+
+  if (!res.ok) {
+    // ★ 先看状态码 —— 两种协议的 error 都嵌在 `error.message` 里
+    const msg =
+      (payload as { error?: { message?: string } } | null)?.error?.message ?? text.slice(0, 200);
+    throw new JevError(
+      `HTTP ${res.status}：${msg}`,
+      res.status,
+      isRetryableStatus(res.status),
+      isQuotaError(res.status, msg),
+    );
+  }
+
+  return { payload, text };
+}
+
+/** 请求头。两种协议的认证方式**完全不同**，不是换个名字 */
+function headersFor(protocol: LlmProtocol, apiKey: string): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (isAnthropicProtocol(protocol)) {
+    // Anthropic 协议：`x-api-key`，**不是** `Authorization: Bearer`
+    if (apiKey) h["x-api-key"] = apiKey;
+    // 版本头是必填的；发错版本会被拒
+    h["anthropic-version"] = "2023-06-01";
+    // ★ 官方 API 要靠这个头才允许浏览器跨域直连。缺了它，官方端点回的是
+    // 「CORS requests must set 'anthropic-dangerous-direct-browser-access' header」——
+    // 而这句话在浏览器里只会变成一个读不出原因的 `Failed to fetch`。
+    // 这条后端**只在浏览器里跑**，所以无条件带上；第三方兼容端点不认识它时
+    // 一般会忽略（实测 Agnes 的 Anthropic 端点在预检里允许任意请求头）。
+    h["anthropic-dangerous-direct-browser-access"] = "true";
+  } else if (apiKey) {
+    // OpenAI 协议：`Authorization: Bearer`。**空密钥时不发这个头** ——
+    // 有些自建端点不需要密钥，发一个 `Bearer ` 反而会被判成鉴权失败
+    h["Authorization"] = `Bearer ${apiKey}`;
+  }
+  return h;
+}
+
+/**
+ * 工具循环里**跨轮累加**的 token 账。
+ *
+ * 可变是这个类型的全部意义：每轮的回包各报各的，而统计要的是整次决策的
+ * 总花费。做成不可变会逼着每轮复制一次，而复制出来的东西没有任何一处要读。
+ */
+interface UsageTally {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}
+
+function addUsage(into: UsageTally, u: LlmUsage): void {
+  into.inputTokens += u.inputTokens;
+  into.outputTokens += u.outputTokens;
+  into.reasoningTokens += u.reasoningTokens;
+}
+
+/**
+ * 一次调用：JSON 路径一次往返，工具路径 N 次。**重试由 `runWithRetry` 罩着。**
+ */
+async function callLlm(
+  cfg: ClientConfig,
+  req: DecisionRequest,
+  opts: LlmBackendOptions & CallOptions,
+  ctx: LlmCallContext,
+): Promise<DecisionResult> {
+  const policy = ctx.llm?.callPolicy ?? "json";
+  return runWithRetry(ctx.retry, ctx.hooks, async () => {
+    try {
+      return policy === "tool"
+        ? await toolAttempt(cfg, req, opts, ctx)
+        : await jsonAttempt(cfg, req, opts, ctx);
+    } catch (e) {
+      throw asJevError(e);
+    }
+  });
+}
+
+async function jsonAttempt(
+  cfg: ClientConfig,
+  req: DecisionRequest,
+  opts: LlmBackendOptions & CallOptions,
+  ctx: LlmCallContext,
+): Promise<Attempt> {
+  const url = llmEndpoint(cfg.base, opts.protocol);
+  const shared = { upstream: opts.upstream, ...effortArg(ctx.llm) };
+  const body = isAnthropicProtocol(opts.protocol)
+    ? toAnthropicRequest(ctx.model, req.state, req.questions, shared)
+    : toLlmRequest(ctx.model, req.state, req.questions, shared);
+
+  const dl = startTimeout(ctx.timeoutMs);
+  let http: LlmHttp;
+  try {
+    http = await postJson(url, headersFor(opts.protocol, cfg.apiKey), body, ctx, dl.signal);
+  } finally {
+    dl.done();
+  }
+
+  // ★ 回包形状的判据是**协议**，不是「有没有 choices」—— 拿 OpenAI 的路径去
+  // 读 Anthropic 的回包会得到一个「回包里没有 choices[0]」，
+  // 而那句话把人指向网关，真正的原因在协议上
+  const content = isAnthropicProtocol(opts.protocol)
+    ? extractAnthropicContent(http.payload)
+    : extractContent(
+        (http.payload as { choices?: unknown[] }).choices?.[0] as Parameters<
+          typeof extractContent
+        >[0],
+      );
+
+  const answers = fromLlmContent(content, req.questions);
+  const usage = isAnthropicProtocol(opts.protocol)
+    ? anthropicUsageOf(http.payload)
+    : usageOf(http.payload);
+
+  return {
+    value: {
+      answers,
+      latencyMs: 0, // 由 runWithRetry 覆盖
+      upstreamCalls: 1, // JSON 路径恒为 1
+      usage,
+      // ★ **单价未知，所以是 `null`，不是 0。** `estimateCost` 那张价目表
+      // 是按代管后端的实测价格维护的，而用户自己填的端点（DeepSeek、
+      // Anthropic、某个自建网关）价格各不相同。填 0 会被下游读成
+      // 「这一次是免费的」—— 一次单价未知的调用不是免费的调用。
+      costUsd: null,
+      raw: http.payload,
+    },
+    upstreamCalls: 1,
+  };
+}
+
+/**
+ * 工具循环。**与 `src/server/server.ts` 的 `runToolLoop` 同源**（见文件头的说明）。
+ *
+ * 实测依据（`docs/llm-backends.md` 第三节）：模型**总是选择一轮全答** ——
+ * N=1/6/12/24 各 2 次，8/8 全成功、上游调用次数恒为 1。所以这里
+ * **不主动限制每轮批量**，只做三件实测要求的事：
+ *
+ *   1. 每轮**先看状态码**再看回包（429 不能被算成「模型没答」）
+ *   2. 空正文 + 预算烧光当失败 —— 模型可能把预算全烧在推理上，
+ *      一个 tool_call 都不发（`extractToolCalls` / `extractAnthropicToolCalls` 里拦）
+ *   3. `upstreamCalls` 与 token **如实累加** —— 循环是 N 次，
+ *      那正是与 Jev 对比的头条数字
+ */
+/** 一轮里收下的一道答案 —— 两种协议取出来之后的**统一形状** */
+interface RoundCall {
+  readonly id: string;
+  readonly answers: Record<string, Answer>;
+}
+
+interface ToolRoundResult {
+  readonly id: string;
+  readonly accepted: readonly string[];
+  readonly remaining: number;
+  readonly remainingKeys: readonly string[];
+}
+
+/**
+ * 两种协议的**会话差异只在这一个小接口里**。
+ *
+ * 循环本身（轮次上限、零进展检测、pending 记账、token 累加）对两种协议逐字相同，
+ * 硬塞进 if/else 会让那份逻辑有两份 —— 而它正是最容易出错、也最值得只写一遍的部分。
+ * 「协议怎么拼历史」是协议知识，「循环怎么转」不是。
+ */
+interface ToolWire {
+  /** 带上当前会话历史的请求体 */
+  body(): unknown;
+  /** 回包 → 这一轮的工具调用。取不出时报错（含「预算烧光」「回了文字」两种） */
+  read(payload: unknown): RoundCall[];
+  /**
+   * 复述 assistant 那一次调用 + 逐条回 tool 的结果。
+   *
+   * 只收 `results` 不收 `roundCalls` —— 复述要用的是**上游原文**，
+   * 而工厂自己留着那一份（`lastCalls`）。让调用方再传一遍，
+   * 迟早会出现「传进来的和实际回包不是同一批」。
+   */
+  append(results: readonly ToolRoundResult[]): void;
+}
+
+function openAiWire(built: ReturnType<typeof buildToolRequest>, questions: Questions): ToolWire {
+  const messages: LlmMessage[] = [...built.messages];
+  let lastCalls: Parameters<typeof assistantToolCallsMessage>[1] = [];
+  return {
+    body: () => ({ ...built, messages }),
+    read: (payload) => {
+      lastCalls = extractToolCalls(
+        (payload as { choices?: unknown[] }).choices?.[0] as Parameters<typeof extractToolCalls>[0],
+      );
+      return lastCalls.map((tc) => ({
+        id: tc.id,
+        answers: answersFromToolArguments(tc.argumentsJson, questions),
+      }));
+    },
+    append: (results) => {
+      // 复述 assistant 那一次 tool_calls —— 少了它上游会拒收随后的 tool 消息
+      messages.push(assistantToolCallsMessage(null, lastCalls));
+      for (const r of results) {
+        messages.push(toolResultMessage(r.id, r.accepted, r.remaining, r.remainingKeys));
+      }
+    },
+  };
+}
+
+function anthropicWire(
+  built: ReturnType<typeof buildAnthropicToolRequest>,
+  questions: Questions,
+): ToolWire {
+  const messages: AnthropicMessage[] = [...built.messages];
+  let lastCalls: Parameters<typeof anthropicAssistantMessage>[0] = [];
+  return {
+    body: () => ({ ...built, messages }),
+    read: (payload) => {
+      lastCalls = extractAnthropicToolCalls(payload);
+      return lastCalls.map((tc) => ({
+        id: tc.id,
+        // ★ Anthropic 的 `input` 已经是对象 —— 走 OpenAI 那条 JSON.parse 会抛
+        answers: answersFromToolInput(tc.input, questions),
+      }));
+    },
+    append: (results) => {
+      messages.push(anthropicAssistantMessage(lastCalls));
+      for (const r of results) {
+        messages.push(anthropicToolResultMessage(r.id, r.accepted, r.remaining, r.remainingKeys));
+      }
+    },
+  };
+}
+
+async function toolAttempt(
+  cfg: ClientConfig,
+  req: DecisionRequest,
+  opts: LlmBackendOptions & CallOptions,
+  ctx: LlmCallContext,
+): Promise<Attempt> {
+  const anthropic = isAnthropicProtocol(opts.protocol);
+  const url = llmEndpoint(cfg.base, opts.protocol);
+  const headers = headersFor(opts.protocol, cfg.apiKey);
+  const shared = { upstream: opts.upstream, ...effortArg(ctx.llm) };
+  const wire = anthropic
+    ? anthropicWire(buildAnthropicToolRequest(ctx.model, req.state, req.questions, shared), req.questions)
+    : openAiWire(buildToolRequest(ctx.model, req.state, req.questions, shared), req.questions);
+
+  const pending = new Set(Object.keys(req.questions));
+  const answers: Record<string, Answer> = {};
+  const usage: UsageTally = { inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
+  let calls = 0;
+  let last: unknown = null;
+
+  // 轮次上限。实测从没进过第二轮，所以它是一个**防死循环的保险**而不是策略：
+  // 模型给回一堆坏参数时，「一条都没收下」会让循环原地打转。
+  // 下面还有一条更直接的零进展检测，两者都要有 —— 上限挡的是「每轮收一条但收不完」
+  const maxRounds = Math.max(1, pending.size) + 4;
+
+  // ★ 显式超时**罩住整个循环**，不是每轮一份：客户端那侧的时间是从它发请求
+  // 算起的，若这里每轮各给一份，N 轮就能拖到客户端早就超时之后
+  const gate = startTimeout(ctx.timeoutMs);
+  try {
+    for (let round = 0; round < maxRounds && pending.size > 0; round++) {
+      const http = await postJson(url, headers, wire.body(), ctx, gate.signal);
+      calls++;
+      last = http.payload;
+      addUsage(usage, anthropic ? anthropicUsageOf(http.payload) : usageOf(http.payload));
+
+      const roundCalls = wire.read(http.payload);
+
+      const before = pending.size;
+      const results: ToolRoundResult[] = [];
+      for (const tc of roundCalls) {
+        const accepted: string[] = [];
+        for (const [k, v] of Object.entries(tc.answers)) {
+          // 已经答过的键不再收 —— 模型重复答同一题时，第一次的那个才是它的判断
+          if (!pending.has(k)) continue;
+          pending.delete(k);
+          answers[k] = v;
+          accepted.push(k);
+        }
+        results.push({ id: tc.id, accepted, remaining: pending.size, remainingKeys: [...pending] });
+      }
+
+      if (pending.size === 0) break;
+
+      // 零进展：这一轮一条有效答案都没收下。再问下去只会把同样的坏参数再拿一次
+      if (pending.size === before) {
+        throw new BrokerError(
+          `这一轮 ${roundCalls.length} 条 tool_call 没有给出任何有效答案，还剩 ${pending.size} 题`,
+          true,
+        );
+      }
+
+      wire.append(results);
+    }
+  } catch (e) {
+    // 整个循环超时要与「上游回了个错误」分开 —— 前者值得重试，后者要看状态码
+    if (gate.signal.aborted) {
+      throw new JevError(`请求超时：${ctx.timeoutMs}ms 内没有跑完工具循环`, undefined, true);
+    }
+    throw e;
+  } finally {
+    gate.done();
+  }
+
+  if (pending.size > 0) {
+    throw new BrokerError(`工具循环达到轮次上限（${maxRounds}），仍有 ${pending.size} 题没答`, true);
+  }
+
+  return {
+    value: {
+      answers,
+      latencyMs: 0,
+      upstreamCalls: calls,
+      usage,
+      costUsd: null, // 同上：用户自备的端点，单价未知
+      raw: last,
+    },
+    upstreamCalls: calls,
   };
 }
 

@@ -58,6 +58,57 @@ broker 翻译也在服务端做。
    Anthropic 官方 API 还需要一个额外的头才允许浏览器直连，这一点要查清并写进提示
 4. 密钥**只在浏览器内存里**（这两条不经过服务端），**绝不落盘、绝不进日志**
 
+### ★ 实现后的实测记录（2026-09-21，真 key）
+
+上面那张表里的 Anthropic 那列**已经用真 key 逐条验过了**（Agnes 的
+Anthropic 兼容端点 `POST {base}/messages`），**全部与协议文档一致**，没有
+出现 `noul` / `boolean` 那种「文档说一套、网关做一套」：
+
+| 项 | 实测结果 |
+|---|---|
+| 路径 / 认证头 / 版本头 | `POST /v1/messages` · `x-api-key` · `anthropic-version: 2023-06-01` ✓ |
+| 顶层 `system`、`messages` 只有 user | ✓ |
+| 回包正文 | `content[]` 里 `type === "text"` 的那一段 ✓ |
+| 结束原因 | `stop_reason`（成功 `end_turn`、工具 `tool_use`、截断 `max_tokens`）✓ |
+| 用量 | `usage.input_tokens` / `output_tokens`（**没有**推理 token 那一栏）✓ |
+| 工具调用 | `tools[]` 用 **`input_schema`**、`tool_choice: {type:"auto"}`；回包是 `content[]` 里的 `tool_use` 块，**`input` 是对象不是字符串** ✓ |
+| 工具续轮 | assistant 回述 `tool_use` 块 + user 里放 `tool_result` 块（`tool_use_id` 配对），回 200 ✓ |
+
+**★ 一处只有端到端跑真 key 才会发现的差异**：
+
+> **Anthropic 协议没有 `response_format`**，于是同一份提示词、同一个模型，
+> OpenAI 那边回**裸 JSON**，Anthropic 这边回的是
+> ` ```json\n{…}\n``` ` —— 模型自己套了 markdown 代码围栏。
+>
+> 不处理的话，**JSON 路径（`callPolicy` 的默认值）在这条协议上 100% 失败**，
+> 而报错是「上游输出的不是合法 JSON」—— 看着像模型不听话，
+> 真正的原因在协议少了一个字段。
+>
+> 修法：`fromLlmContent` 先剥掉**包住整段正文**的围栏（前后还有别的话就不剥，
+> 容错仍然收窄）。纯函数的形状测试当时全绿，**这条是靠端到端跑出来的**。
+
+**CORS 实测**（发 `Origin` 头看回包）：
+
+| 端点 | 结论 |
+|---|---|
+| Agnes（两种协议同一个 host） | 预检 204，`Access-Control-Allow-Origin: *`、`Allow-Headers: *` ⟹ **可浏览器直连** |
+| DeepSeek | 预检 200，回显 Origin，`Allow-Headers: authorization,content-type` ⟹ **可浏览器直连** |
+| `api.anthropic.com` 官方 | 本环境发出的预检**全部变体都回 403**（含带 `anthropic-dangerous-direct-browser-access` 的那种），拿不到 CORS 头。**没能实测成功** |
+
+关于官方 API 那个头：文档明确要求浏览器请求带
+`anthropic-dangerous-direct-browser-access: true`（SDK 的 `dangerouslyAllowBrowser`
+就是加它），不带会回 `CORS requests must set 'anthropic-dangerous-direct-browser-access' header`。
+**本条来自官方文档与社区资料，不是本项目的实测** —— 本项目没有 Anthropic 的密钥，
+预检又被挡在 403，所以官方端点这条后端在界面上标的是「未实测」。
+
+**效力未定的两处**（如实记，别当成已验证）：
+
+- `thinking: {type:"disabled"}` 被上游 200 接受，但**它到底有没有真的关掉思考
+  没有测出来**（n=1：设它 11.6s / 不设 20.5s / `chat_template_kwargs` 6.7s，
+  单次采样说明不了问题）。所以 broker 只保证**形状合法、上游不拒收**
+- Anthropic 协议的 `usage` 里没有推理 token 那一栏 —— `reasoningTokens` 恒为 0，
+  这正是 `TokenUsage` 注释里那条「用了推理却不报」的已知盲区
+
 ---
 
 ## 一、要建的是什么

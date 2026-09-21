@@ -318,6 +318,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.llmFreeTrial": "LLM 免费试用 1",
     "backend.llmFreeTrialDesc":
       "本站代管的免费 LLM 额度。它背后是一个通用的语言模型，由 broker 包装成 Jev 兼容接口 —— 对上层完全一样，只是**慢得多、要花 token**。选中它之后 API 抽屉里会多出四个调用配置。",
+    "backend.llmOpenai": "OpenAI 兼容 LLM（自备密钥）",
+    "backend.llmOpenaiDesc":
+      "填一个说 OpenAI 兼容协议（`/chat/completions`）的地址，带上你自己的密钥。预置的是 DeepSeek 的端点，改成任何一家都行。**密钥只存在你这台浏览器里**：这条后端不经过本站服务端，请求从浏览器直发对方（也正因如此，对方必须允许跨域，否则会被浏览器拦下）。地址填版本根（如 `https://api.deepseek.com/v1`）或整条端点都可以。",
+    "backend.llmAnthropic": "Anthropic 兼容 LLM（自备密钥）",
+    "backend.llmAnthropicDesc":
+      "填一个说 Anthropic 协议（`/messages`）的地址，带上你自己的密钥。**密钥只存在你这台浏览器里**，请求从浏览器直发对方。⚠ 用官方 api.anthropic.com 时需要 `anthropic-dangerous-direct-browser-access` 头才允许跨域，本项目已经替你带上；但**官方端点未经实测**（本项目没有 Anthropic 的密钥），兼容端点验过。",
     "backend.vercel": "Vercel AI Gateway 直连",
     "backend.vercelDesc": "自己带密钥，额度归你掌控。",
     "backend.typesafe": "TypeSafe 官方",
@@ -835,6 +841,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     "backend.llmFreeTrial": "LLM free trial 1",
     "backend.llmFreeTrialDesc":
       "A free LLM quota hosted by this site. Behind it is a general-purpose language model, wrapped into a Jev-compatible interface by the broker — identical from above, just far slower and metered in tokens. Selecting it adds four call settings to the API drawer.",
+    "backend.llmOpenai": "OpenAI-compatible LLM (bring your own key)",
+    "backend.llmOpenaiDesc":
+      "Point this at any address speaking the OpenAI-compatible protocol (`/chat/completions`) and supply your own key. It ships prefilled with DeepSeek's endpoint; swap in any other. **The key lives only in this browser**: this backend never touches this site's server, so requests go straight from your browser to the provider (which is also why the provider must allow cross-origin calls, or the browser will block them). Either the version root (`https://api.deepseek.com/v1`) or the full endpoint URL works.",
+    "backend.llmAnthropic": "Anthropic-compatible LLM (bring your own key)",
+    "backend.llmAnthropicDesc":
+      "Point this at any address speaking the Anthropic protocol (`/messages`) and supply your own key. **The key lives only in this browser**, and requests go straight from your browser to the provider. Note: the official api.anthropic.com additionally requires the `anthropic-dangerous-direct-browser-access` header to allow cross-origin calls — this project sends it for you, but **the official endpoint has not been tested here** (this project holds no Anthropic key); a compatible endpoint has.",
     "backend.vercel": "Vercel AI Gateway (direct)",
     "backend.vercelDesc": "Bring your own key; the quota is yours to control.",
     "backend.typesafe": "TypeSafe official",

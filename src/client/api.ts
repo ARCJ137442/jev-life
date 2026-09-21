@@ -17,12 +17,14 @@
  * 本文件里剩下的部分都真的只对浏览器成立：`location`、静态托管的地址解析、
  * 以及给界面看的那张后端目录表。
  */
-import { createSystemoneBackend } from "../shared/backend.js";
+import { createLlmBackend, createSystemoneBackend } from "../shared/backend.js";
 import type {
   CallOptions,
   ClientConfig as BackendTarget,
   DecisionBackend,
 } from "../shared/backend.js";
+import { ANTHROPIC_COMPAT_UPSTREAM, OPENAI_COMPAT_UPSTREAM } from "../shared/llm-broker.js";
+import type { LlmProtocol } from "../shared/llm-broker.js";
 
 /* ══════════════ 静态托管支持 ══════════════ */
 
@@ -102,7 +104,9 @@ export type BackendId =
   | "typesafe"
   | "openrouter"
   | "laya"
-  | "lmstudio";
+  | "lmstudio"
+  | "llmopenai"
+  | "llmanthropic";
 
 export interface BackendConfig {
   /**
@@ -148,6 +152,17 @@ export interface BackendConfig {
    * 报错离原因就太远了（那正是 ui-spec 第五节第 3 条记的那次）。
    */
   llmUpstream?: string;
+  /**
+   * 这条 LLM 后端说**哪种协议** —— 决定路径、认证头、请求体与回包解析。
+   *
+   * ⚠ **只有「用户自备 key 的直连 LLM」才有值。** 代管那条（`llmfree`）的
+   * 翻译在服务端做（见 `/api/evaluate3`），客户端既不需要、也不该知道
+   * 上游说的是哪种协议 —— 那正是四层架构里「中间那层必须真的兼容」的意思。
+   *
+   * 它同时是 `createBackend` 的分流判据：有值 ⟹ broker 在**浏览器里**跑。
+   * 这条路的密钥不经过任何服务端（静态托管下也没有服务端可经过）。
+   */
+  readonly protocol?: LlmProtocol;
 }
 
 export const BACKENDS: Record<BackendId, BackendConfig> = {
@@ -239,6 +254,50 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     needsKey: false,
     isLlm: false,
   },
+
+  /* ── 用户自备 key 的两条：broker 在**浏览器里**跑 ──
+   *
+   * ★ 与上面 `llmfree` 的关键差别不在「谁付钱」，而在**翻译发生在哪一层**：
+   * 代管那条有服务端可代劳，这两条没有（静态托管下连 Serverless 都没有）。
+   * 于是同一个纯函数 broker 被搬到了客户端 —— 见 `shared/backend.ts` 的
+   * `createLlmBackend` 与 `docs/llm-backends.md` 第零节。
+   *
+   * ⚠ **密钥语义与代管那几条不同，文案要写清**：这里的 key 是**用户自己的**、
+   * 只存在于**他自己这台浏览器**的内存里，我们既不代管也不转发。
+   */
+  llmopenai: {
+    labelKey: "backend.llmOpenai",
+    // 预置一个**实测跑通过**的端点，用户改成任何 OpenAI 兼容的服务都行。
+    // 直连类后端本来就在界面上写明是谁（与代管的免费额度那条纪律不同）——
+    // 藏着不说，用户就不知道这个框该填什么
+    base: "https://api.deepseek.com/v1",
+    model: "deepseek-flash",
+    noteKey: "backend.llmOpenaiDesc",
+    // 实测：这条端点用真 key 直连跑通过（协议形状、CORS 头都验过）。
+    // 但用户改填别的地址之后，那就不再是这里验过的东西了
+    verified: true,
+    managed: false,
+    needsKey: true,
+    isLlm: true,
+    llmUpstream: OPENAI_COMPAT_UPSTREAM,
+    protocol: "openai",
+  },
+  llmanthropic: {
+    labelKey: "backend.llmAnthropic",
+    base: "https://api.anthropic.com/v1",
+    model: "claude-opus-5",
+    noteKey: "backend.llmAnthropicDesc",
+    // ⚠ **未实测。** Anthropic 协议的形状本身验过了（在一家兼容端点上，
+    // 用真 key 打的真请求），但**官方 api.anthropic.com 没验过** ——
+    // 本项目没有 Anthropic 的 key，而且从开发环境发出的预检请求被挡在
+    // 403，连「能不能浏览器直连」都没能实测。所以这条不敢标「已实测可用」
+    verified: false,
+    managed: false,
+    needsKey: true,
+    isLlm: true,
+    llmUpstream: ANTHROPIC_COMPAT_UPSTREAM,
+    protocol: "anthropic",
+  },
 };
 
 /**
@@ -288,5 +347,25 @@ export function createBackend(
 ): DecisionBackend | null {
   const target = resolveConfig(cfg);
   if (target === null) return null;
+
+  // ★ **分流点：这条后端说不说协议，决定 broker 在哪一层跑。**
+  //
+  // 有 `protocol` ⟹ 用户自备 key、直连自己的端点 ⟹ 没有服务端可代劳
+  // ⟹ 翻译在浏览器里做（`createLlmBackend`）。
+  // 没有 ⟹ 要么是 Jev 协议，要么是代管的那条 LLM（翻译在服务端做掉之后，
+  // 它在客户端**就是一条 SystemOne 上游**）。
+  //
+  // 判据用 `protocol` 而不是 `isLlm`：代管那条也是 `isLlm: true`，
+  // 但它的翻译必须继续留在服务端 —— 密钥在那边，形状知识也在那边。
+  const meta = BACKENDS[cfg.provider];
+  if (meta.protocol !== undefined) {
+    return createLlmBackend(target, {
+      id: cfg.provider,
+      protocol: meta.protocol,
+      // 能力表按**协议族**索引，不是按厂商 —— 见 `llm-broker.ts` 的 `LlmProtocol`
+      upstream: meta.llmUpstream ?? "",
+      ...opts,
+    });
+  }
   return createSystemoneBackend(target, { id: cfg.provider, ...opts });
 }

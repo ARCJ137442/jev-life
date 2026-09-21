@@ -92,6 +92,19 @@ export interface LlmRequest {
  */
 export type LlmReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/**
+ * 协议族 —— 「用户自备 base URL」那两条后端的身份。
+ *
+ * ⚠ **它们是「协议」，不是「厂商」。** 能力表按它索引，是因为**能收哪些参数
+ * 由协议决定**（Anthropic 协议里压根没有 `reasoning_effort` 这个字段），
+ * 而不是因为某一家网关碰巧做了什么。这与 `agnes` 那条按**具体上游**索引的
+ * 条目是两种东西，别把它们混成一类。
+ */
+export type LlmProtocol = "openai" | "anthropic";
+
+export const OPENAI_COMPAT_UPSTREAM = "openai-compat";
+export const ANTHROPIC_COMPAT_UPSTREAM = "anthropic-compat";
+
 export interface UpstreamCapabilities {
   /**
    * 该上游**认不认识** `reasoning_effort` 这个字段。
@@ -117,6 +130,26 @@ export interface UpstreamCapabilities {
 const CAPABILITIES: Record<string, UpstreamCapabilities> = {
   // 实测：none / low / medium / high / max 全收，**xhigh 报 400**
   agnes: { supportsEffort: true, reasoningEfforts: ["none", "low", "medium", "high", "max"] },
+
+  // ── 协议族（用户自备 base URL 的两条）──
+  //
+  // ⚠ 这两条的**依据强度与 `agnes` 那条不同**，不要混着看：
+  // 后者是「在这一家网关上逐档实测」，前者是「在这个协议上验过两个独立实现」
+  // （Agnes 的 SGLang 与 DeepSeek）。用户填的地址可能来自我们没见过的第三家 ——
+  // 「OpenAI 兼容」这个承诺是否真的成立，取决于那一家。
+  //
+  // 保守方向仍然是「不发」：收不了的档位一律不发，代价是拿不到关思维链的收益
+  // （质量问题），发错值的代价是整个决策请求 400（可用性问题）。
+  [OPENAI_COMPAT_UPSTREAM]: {
+    supportsEffort: true,
+    reasoningEfforts: ["none", "low", "medium", "high", "max"],
+  },
+  // Anthropic 协议里**没有** `reasoning_effort`。它能表达「关思考」的方式是
+  // `thinking: {type:"disabled"}` —— 所以这一族只认 `none`，其余档位一律不发
+  // （见 `anthropicThinking`）。实测：Agnes 的 Anthropic 端点上
+  // `thinking:{type:"disabled"}` 回 200；`reasoning_effort` 也回 200 但**看不出
+  // 效果**（n=1，只能算观察），所以不赌它。
+  [ANTHROPIC_COMPAT_UPSTREAM]: { supportsEffort: true, reasoningEfforts: ["none"] },
 };
 
 const UNKNOWN: UpstreamCapabilities = { supportsEffort: false, reasoningEfforts: [] };
@@ -171,6 +204,38 @@ const JSON_SHAPE =
   "不要任何其他文字。每个问题都要给出一条，key 必须原样返回。";
 
 /**
+ * 两种协议**共用**这两段提示词。
+ *
+ * ⚠ 抽出来不是为了少写几行：提示词是**实验变量**。两条协议各写一份，
+ * 迟早会在某次改动里走样，而走样的症状是「换一种协议，成功率就变了」——
+ * 于是「协议」与「提示词」这两个变量被搅在一起，对照实验作废。
+ * 实测依据（`docs/llm-backends.md` 第三节）那张成功率表用的是同一份提示词。
+ */
+function systemPrompt(shape: string, effort: LlmReasoningEffort | null | undefined): string {
+  // ⚠ 这一行判的是**调用方显式传了 `"none"`**，而不是「最终下发的 effort 是 none」。
+  // 于是默认路径（调用方省略 effort）下：请求体里带着 `reasoning_effort: "none"`，
+  // 提示词里却**没有**这句「直接给出答案」。两者说的其实是同一件事。
+  // 没顺手改的理由：提示词是**实验变量**，而这条不一致没有实测依据支撑改哪一边
+  // （`docs/llm-backends.md` 那张成功率表来自探针脚本，不是这份提示词）。
+  // 要改之前先测 —— 别把它当成一处笔误。
+  return [SYS_PREFIX, effort === "none" ? "直接给出答案，不要展开推理过程。" : "", shape]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function userPrompt(state: unknown, questions: Questions): string {
+  const keys = Object.keys(questions);
+  const lines = keys.map((k) => `- ${k}: ${questionText(questions[k])}`);
+  return [
+    "当前局面：",
+    JSON.stringify(state, null, 1),
+    "",
+    `请回答以下 ${keys.length} 个问题：`,
+    ...lines,
+  ].join("\n");
+}
+
+/**
  * Jev 形状 → LLM 形状。
  *
  * 纯函数：不改动入参。
@@ -195,31 +260,6 @@ export function toLlmRequest(
     readonly maxTokens?: number;
   },
 ): LlmRequest {
-  const keys = Object.keys(questions);
-  const lines = keys.map((k) => `- ${k}: ${questionText(questions[k])}`);
-
-  const user = [
-    "当前局面：",
-    JSON.stringify(state, null, 1),
-    "",
-    `请回答以下 ${keys.length} 个问题：`,
-    ...lines,
-  ].join("\n");
-
-  // ⚠ 这一行判的是**调用方显式传了 `"none"`**，而不是「最终下发的 effort 是 none」。
-  // 于是默认路径（调用方省略 effort）下：请求体里带着 `reasoning_effort: "none"`，
-  // 提示词里却**没有**这句「直接给出答案」。两者说的其实是同一件事。
-  // 没顺手改的理由：提示词是**实验变量**，而这条不一致没有实测依据支撑改哪一边
-  // （`docs/llm-backends.md` 那张成功率表来自探针脚本，不是这份提示词）。
-  // 要改之前先测 —— 别把它当成一处笔误。
-  const system = [
-    SYS_PREFIX,
-    opts.effort === "none" ? "直接给出答案，不要展开推理过程。" : "",
-    JSON_SHAPE,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
   // 关思维链是**默认姿态**（实测依据见文件头）。上游不认识这个字段就**整个不发** ——
   // 不能回落到 "none"：那是在猜它能收，而猜错的代价是整个请求 400。
   const effort = resolveEffort(opts.effort, opts.upstream);
@@ -227,8 +267,8 @@ export function toLlmRequest(
   return {
     model,
     messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
+      { role: "system", content: systemPrompt(JSON_SHAPE, opts.effort) },
+      { role: "user", content: userPrompt(state, questions) },
     ],
     response_format: { type: "json_object" },
     max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -334,10 +374,43 @@ export function extractContent(choice: {
  * ⚠ 返回的题数**可能少于**给定的题数。调用方必须检查：
  * 这与「答案为空」是两回事，但对决策而言同样是残缺的。
  */
+/**
+ * 剥掉整段包住正文的 markdown 代码围栏。
+ *
+ * ★ **这条是端到端跑真 key 才发现的**（纯函数的形状测试全绿）：
+ * OpenAI 那边带了 `response_format: {type:"json_object"}`，回的是裸 JSON；
+ * **Anthropic 协议没有这个字段可发**，于是同一份提示词、同一个模型，
+ * 回的是
+ *
+ *     ```json
+ *     {"answers":[…]}
+ *     ```
+ *
+ * 不剥的话，JSON 路径（`callPolicy` 的**默认值**）在这条协议上 100% 失败，
+ * 而失败文案是「上游输出的不是合法 JSON」—— 看着像模型不听话，
+ * 真正的原因在协议少了一个字段。**症状与原因无关**，又一个。
+ *
+ * ⚠ **只在围栏包住整段正文时才剥。** 围栏前面还有别的话时**不猜** ——
+ * 往前找 JSON 等于替模型决定「哪一段才是答案」，而猜出来的东西会混进统计。
+ * 要放宽这条边界，先有实测依据说明放宽能救回多少。
+ *
+ * 纯函数：不改动入参。
+ */
+function unwrapFence(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("```")) return trimmed;
+  const firstLineEnd = trimmed.indexOf("\n");
+  if (firstLineEnd === -1) return trimmed;
+  const body = trimmed.slice(firstLineEnd + 1);
+  // 取**最后**一个围栏：这样「围栏 + 后面跟一句话」也认得出来
+  const close = body.lastIndexOf("```");
+  return close === -1 ? trimmed : body.slice(0, close);
+}
+
 export function fromLlmContent(content: string, questions: Questions): Record<string, Answer> {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    parsed = JSON.parse(unwrapFence(content));
   } catch {
     throw new BrokerError(`上游输出的不是合法 JSON：${content.slice(0, 120)}`, true);
   }
@@ -534,33 +607,13 @@ export function buildToolRequest(
     readonly maxTokens?: number;
   },
 ): LlmToolRequest {
-  const keys = Object.keys(questions);
-  const lines = keys.map((k) => `- ${k}: ${questionText(questions[k])}`);
-
-  const user = [
-    "当前局面：",
-    JSON.stringify(state, null, 1),
-    "",
-    `请回答以下 ${keys.length} 个问题：`,
-    ...lines,
-  ].join("\n");
-
-  // 这一行与 toLlmRequest 判的是同一件事：调用方**显式传了 `"none"`**
-  const system = [
-    SYS_PREFIX,
-    opts.effort === "none" ? "直接给出答案，不要展开推理过程。" : "",
-    TOOL_SHAPE,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
   const effort = resolveEffort(opts.effort, opts.upstream);
 
   return {
     model,
     messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
+      { role: "system", content: systemPrompt(TOOL_SHAPE, opts.effort) },
+      { role: "user", content: userPrompt(state, questions) },
     ],
     tools: [answerTool()],
     tool_choice: "auto",
@@ -653,8 +706,25 @@ export function answersFromToolArguments(
   } catch {
     return {};
   }
+  return answersFromToolInput(parsed, questions);
+}
 
-  const raw = (parsed as { answers?: unknown } | null)?.answers;
+/**
+ * 同上，但入参已经是**解析好的对象**。
+ *
+ * ★ 分出这一支是因为 **Anthropic 协议的 `tool_use.input` 就是对象**，不是
+ * OpenAI 那种 JSON 字符串（实测回包：
+ * `{"type":"tool_use","id":"call_…","name":"answer_questions","input":{…}}`）。
+ * 照抄 OpenAI 那条路会先 `JSON.parse` 一个对象 —— 那会抛，
+ * 而按「坏参数忽略」的口径，症状是**每一轮都收下零个答案**、
+ * 循环空转到轮次上限才报一个与原因无关的错。
+ *
+ * 容错口径与 `answersFromToolArguments` 完全一致（键要在问过的那些里、
+ * 值要是有限数、越界夹住不丢弃、坏形状返回空映射而不抛）。
+ * 纯函数：不改动入参。
+ */
+export function answersFromToolInput(input: unknown, questions: Questions): Record<string, Answer> {
+  const raw = (input as { answers?: unknown } | null)?.answers;
   if (!Array.isArray(raw)) return {};
 
   const type = upstreamTypeFor(questions);
@@ -725,5 +795,375 @@ export function usageOf(payload: unknown): LlmUsage {
     inputTokens: u.prompt_tokens ?? 0,
     outputTokens: u.completion_tokens ?? 0,
     reasoningTokens: u.completion_tokens_details?.reasoning_tokens ?? 0,
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Anthropic 兼容协议（`POST {base}/messages`）
+   ══════════════════════════════════════════════════════════════════
+
+   ★ 为什么 broker 要说两种协议：**用户自备 key 的后端没有那层服务端**。
+   代管那条的路径是「客户端发 Jev 形状 → 服务端翻译 → 上游」，而 GitHub Pages
+   上连 Serverless 都没有 —— 翻译只能发生在浏览器里。broker 本来就是纯函数，
+   两边都能跑，缺的只是第二种协议的形状知识（见 `docs/llm-backends.md` 第零节）。
+
+   ⚠ **下面每一处形状都来自实测**，不是照协议文档推的（本项目栽过
+   「文档说一套、网关做一套」那一次）。实测环境：2026-09-21，
+   Agnes 的 Anthropic 兼容端点。与技术文档的差异只有一处，且已记在下面对应位置。
+*/
+
+/** `POST {base}/xxx` 该拼哪个后缀 —— 拼错是 404，而 404 与「后端挂了」长得一样 */
+const ENDPOINT_PATH: Record<LlmProtocol, string> = {
+  openai: "/chat/completions",
+  anthropic: "/messages",
+};
+
+/**
+ * 把用户填的 base 补成真正的端点。
+ *
+ * **两种粘法都得能用**：填 `https://api.deepseek.com/v1`（版本根）由我们补后缀，
+ * 或者直接把 `https://api.deepseek.com/v1/chat/completions` 整个粘进来。
+ * 后者是很多人从文档里复制的形态 —— 重复拼一次就是 404，而那个 404
+ * 会被报成「后端暂时不可用」，症状离原因很远。
+ */
+export function llmEndpoint(base: string, protocol: LlmProtocol): string {
+  const trimmed = base.replace(/\/+$/, "");
+  const path = ENDPOINT_PATH[protocol];
+  return trimmed.endsWith(path) ? trimmed : trimmed + path;
+}
+
+/** 实测回包里 `content[]` 的元素。**只有这三种与本项目有关** */
+export interface AnthropicTextBlock {
+  readonly type: "text";
+  readonly text: string;
+}
+export interface AnthropicToolUseBlock {
+  readonly type: "tool_use";
+  readonly id: string;
+  readonly name: string;
+  /** ★ **对象**，不是 JSON 字符串 —— 与 OpenAI 的 `arguments` 不是一回事 */
+  readonly input: unknown;
+}
+export interface AnthropicToolResultBlock {
+  readonly type: "tool_result";
+  readonly tool_use_id: string;
+  readonly content: string;
+}
+export type AnthropicBlock = AnthropicTextBlock | AnthropicToolUseBlock | AnthropicToolResultBlock;
+
+/**
+ * ⚠ `role` 只有这两种 —— **Anthropic 协议里没有 `system` 角色**。
+ * 系统提示是顶层的一个字符串参数（见 `AnthropicRequest.system`）。
+ * 把它塞进 `messages` 会被当成用户消息，而模型会照做、不报错 ——
+ * 症状是「提示词里的约束好像不起作用」。
+ */
+export interface AnthropicMessage {
+  readonly role: "user" | "assistant";
+  readonly content: string | readonly AnthropicBlock[];
+}
+
+export interface AnthropicRequest {
+  readonly model: string;
+  /** ★ **顶层**，不在 `messages` 里 */
+  readonly system: string;
+  readonly messages: readonly AnthropicMessage[];
+  /** 协议要求必填（与 OpenAI 那边可选不同），我们永远发 */
+  readonly max_tokens: number;
+  /**
+   * 关思考。**这是 Anthropic 协议表达「关思维链」的**方式 ——
+   * `reasoning_effort` 是 OpenAI 那一侧的字段，这里没有。
+   *
+   * 与 `LlmRequest.reasoning_effort` 一样是**可选且不支持就整项不发**：
+   * 发一个上游不认识的字段，代价是整个决策请求被打掉。
+   */
+  readonly thinking?: { readonly type: "disabled" };
+}
+
+export interface AnthropicToolDefinition {
+  /** 与 OpenAI 不同：**没有 `type: "function"` 那一层**，也没有 `function` 包装 */
+  readonly name: string;
+  readonly description: string;
+  readonly input_schema: Record<string, unknown>;
+}
+
+export interface AnthropicToolRequest extends AnthropicRequest {
+  readonly tools: readonly AnthropicToolDefinition[];
+  /** ★ 是**对象** `{type:"auto"}`，不是字符串 `"auto"` */
+  readonly tool_choice: { readonly type: "auto" };
+}
+
+/**
+ * 把收敛后的 effort 翻译成 Anthropic 协议的表达。
+ *
+ * **只有 `none` 有对应物**（`thinking: {type:"disabled"}`）；其余档位返回
+ * `undefined` = 不发。理由：Anthropic 的思考控制是 `budget_tokens`（token 预算），
+ * 而 UI 上那六档是「强度」，两者没有可换算的对应 —— 硬凑一个预算
+ * 等于替用户做了它没做的决定，而那个决定会影响成本。
+ *
+ * ⚠ **实测的效力边界**：`thinking:{type:"disabled"}` 在 Agnes 的 Anthropic
+ * 端点上回 200，但「它到底有没有真的关掉思考」**没有测出来**（n=1，
+ * 挂钟 11.6s vs 不设时的 20.5s vs `chat_template_kwargs` 的 6.7s —— 单次采样
+ * 说明不了问题）。所以这里**只保证形状合法、上游不拒收**，不声称它一定关得掉。
+ */
+function anthropicThinking(
+  effort: LlmReasoningEffort | undefined,
+): { readonly type: "disabled" } | undefined {
+  return effort === "none" ? { type: "disabled" } : undefined;
+}
+
+/**
+ * Jev 形状 → Anthropic 形状。
+ *
+ * 与 `toLlmRequest` 的差别集中在四处：`system` 提到顶层、没有 `response_format`
+ * （Anthropic 协议里形状只能靠提示词约束）、思考控制换成 `thinking`、
+ * `max_tokens` 必填。提示词正文两份**逐字一致**（见 `systemPrompt`）。
+ *
+ * 纯函数：不改动入参。
+ */
+export function toAnthropicRequest(
+  model: string,
+  state: unknown,
+  questions: Questions,
+  opts: {
+    readonly upstream: string;
+    /** 三态，语义与 `toLlmRequest` 完全一致（见那里的注释） */
+    readonly effort?: LlmReasoningEffort | null;
+    readonly maxTokens?: number;
+  },
+): AnthropicRequest {
+  const effort = resolveEffort(opts.effort, opts.upstream);
+  const thinking = anthropicThinking(effort);
+
+  return {
+    model,
+    system: systemPrompt(JSON_SHAPE, opts.effort),
+    messages: [{ role: "user", content: userPrompt(state, questions) }],
+    max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(thinking === undefined ? {} : { thinking }),
+  };
+}
+
+/** 工具定义：把 JSON Schema 从 OpenAI 的 `function.parameters` 挪到 `input_schema` */
+function anthropicAnswerTool(): AnthropicToolDefinition {
+  const tool = answerTool().function;
+  return { name: tool.name, description: tool.description, input_schema: tool.parameters };
+}
+
+/**
+ * Jev 形状 → Anthropic 工具调用形状。
+ *
+ * 与 `buildToolRequest` 的差别同上，另加 `tools` 的包装层不同。**不带
+ * `response_format`**（Anthropic 协议没有这个字段，形状由 schema 强制）。
+ *
+ * 纯函数：不改动入参。
+ */
+export function buildAnthropicToolRequest(
+  model: string,
+  state: unknown,
+  questions: Questions,
+  opts: {
+    readonly upstream: string;
+    readonly effort?: LlmReasoningEffort | null;
+    readonly maxTokens?: number;
+  },
+): AnthropicToolRequest {
+  const effort = resolveEffort(opts.effort, opts.upstream);
+  const thinking = anthropicThinking(effort);
+
+  return {
+    model,
+    system: systemPrompt(TOOL_SHAPE, opts.effort),
+    messages: [{ role: "user", content: userPrompt(state, questions) }],
+    tools: [anthropicAnswerTool()],
+    tool_choice: { type: "auto" },
+    max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(thinking === undefined ? {} : { thinking }),
+  };
+}
+
+/* ══════════════ 响应侧：Anthropic 形状 → Jev 形状 ══════════════ */
+
+interface AnthropicEnvelope {
+  readonly content?: unknown;
+  readonly stop_reason?: string;
+}
+
+function envelopeOf(payload: unknown): AnthropicEnvelope | null {
+  if (payload === null || typeof payload !== "object") return null;
+  return payload as AnthropicEnvelope;
+}
+
+/**
+ * 把 `content[]` 里 `type === "text"` 的段子**原样接起来**。
+ *
+ * ⚠ 三件事：
+ *   1. **别的块不是正文。** 开了思考时 `content` 里会有 `thinking` 之类的块，
+ *      挑错块等于把推理过程当成答案送去 `JSON.parse`
+ *   2. **用 `+=` 而不是 `join("\n")`** —— 插入分隔符会把跨块切开的 JSON 拆坏。
+ *      实测回包里正文只有一段，所以这一条目前是防御性的
+ *   3. 只有字符串才算 —— 形状不对的块静默跳过，由调用方判「空即失败」
+ */
+function anthropicText(blocks: readonly unknown[]): string {
+  let out = "";
+  for (const b of blocks) {
+    const c = b as { type?: unknown; text?: unknown };
+    if (c?.type === "text" && typeof c.text === "string") out += c.text;
+  }
+  return out;
+}
+
+/**
+ * 取出正文，**空的时候抛错**。
+ *
+ * 与 `extractContent` 同一条纪律，只是判据换成了 `content[]`：**HTTP 200 却
+ * 什么都没答**必须当失败，否则它会以一个「答案数 0」的结果流进统计，
+ * 表现成「模型不行」——而真正的原因是推理把 `max_tokens` 吃光了。
+ * 实测在这个协议上的表现是 `stop_reason: "max_tokens"`。
+ */
+export function extractAnthropicContent(payload: unknown): string {
+  const env = envelopeOf(payload);
+  if (env === null) throw new BrokerError("回包不是对象", true);
+  if (!Array.isArray(env.content)) {
+    throw new BrokerError("回包里没有 content 数组", true, env.stop_reason);
+  }
+
+  const text = anthropicText(env.content);
+  if (text.trim() === "") {
+    const fr = env.stop_reason ?? "未知";
+    throw new BrokerError(
+      fr === "max_tokens"
+        ? "上游把输出预算全部用在了推理上，没有产出答案（stop_reason=max_tokens）"
+        : `上游返回了空的 content（stop_reason=${fr}）`,
+      true,
+      fr,
+    );
+  }
+  return text;
+}
+
+/** 一次工具调用的形状（Anthropic 版）。`input` 已经是解析好的对象 */
+export interface AnthropicToolCall {
+  readonly id: string;
+  readonly name: string;
+  readonly input: unknown;
+}
+
+/**
+ * 从回包里取出 `tool_use` 块。
+ *
+ * ★ **工具路径的「空正文 + 预算烧光」在这里拦**，与 `extractToolCalls` 同一条理由：
+ * 工具调用成功时 `content` 里可能**一个 text 块都没有**（实测回包正是如此），
+ * 所以不能拿「没有正文」当判据，得看**有没有 tool_use**。
+ *
+ * 三种「没有 tool_use」的情形分开报，因为它们指向完全不同的处置：
+ *   1. 预算烧光（`stop_reason: "max_tokens"`）→ 重试，或把预算调大
+ *   2. 模型回了一段文字（提示词没让它用工具）→ 重试也是白搭，要看提示词
+ *   3. 回包结构就不对（没有 `content[]`）→ 上游或网关的问题
+ * **归成一个「模型没答」就等于把三种故障混成一栏统计** —— 那是踩过的坑。
+ */
+export function extractAnthropicToolCalls(payload: unknown): AnthropicToolCall[] {
+  const env = envelopeOf(payload);
+  if (env === null) throw new BrokerError("回包不是对象", true);
+  const fr = env.stop_reason ?? "未知";
+  if (!Array.isArray(env.content)) {
+    throw new BrokerError("回包里没有 content 数组", true, fr);
+  }
+
+  const out: AnthropicToolCall[] = [];
+  for (const b of env.content) {
+    const c = b as { type?: unknown; id?: unknown; name?: unknown; input?: unknown };
+    if (c?.type !== "tool_use") continue;
+    // 没有 id 就没法回述 tool_result（`tool_use_id` 是必填的），整条丢掉
+    if (typeof c.id !== "string") continue;
+    out.push({
+      id: c.id,
+      name: typeof c.name === "string" ? c.name : ANSWER_TOOL_NAME,
+      // 实测 `input` 是对象；上游真发了字符串也原样收着，由 `answersFromToolInput` 判
+      input: c.input ?? {},
+    });
+  }
+
+  if (out.length > 0) return out;
+
+  const text = anthropicText(env.content);
+  if (text.trim() === "") {
+    throw new BrokerError(
+      fr === "max_tokens"
+        ? "上游把输出预算全部用在了推理上，一个 tool_call 都没发（stop_reason=max_tokens）"
+        : `上游既没有调用工具，content 也是空的（stop_reason=${fr}）`,
+      true,
+      fr,
+    );
+  }
+  throw new BrokerError(
+    `上游回了文字而不是工具调用（stop_reason=${fr}）：${text.slice(0, 120)}`,
+    true,
+    fr,
+  );
+}
+
+/**
+ * 从 Anthropic 回包里取出 usage。
+ *
+ * ⚠ **字段名与 OpenAI 那一套完全不同**：`input_tokens` / `output_tokens`
+ * （不是 `prompt_tokens` / `completion_tokens`）。抄错不会报错，只会让
+ * 每一栏都恒为 0 —— 而 0 看起来像「这次没花 token」。
+ *
+ * ⚠ **`reasoningTokens` 恒为 0，这是已知盲区。** 实测的 Anthropic 兼容回包里
+ * 只有 input/output 与两个 cache 字段，**没有推理 token 这一栏**。
+ * 与 `TokenUsage.reasoningTokens` 注释里那条边界是同一件事：
+ * 「用了推理却不报」的后端会让这一栏显示 0 而不是「不知道」。观测到之后要重新设计。
+ */
+export function anthropicUsageOf(payload: unknown): LlmUsage {
+  const u =
+    (payload as { usage?: { input_tokens?: number; output_tokens?: number } } | null)?.usage ?? {};
+  return {
+    inputTokens: u.input_tokens ?? 0,
+    outputTokens: u.output_tokens ?? 0,
+    reasoningTokens: 0,
+  };
+}
+
+/**
+ * 复述 assistant 那一次 `tool_use`。
+ *
+ * **不回述的话上游会拒收随后的 tool_result** —— 协议要求每个 `tool_result`
+ * 都对应前面一条 `tool_use`。`input` 原样带回（它就是模型当时的判断）。
+ */
+export function anthropicAssistantMessage(
+  calls: readonly AnthropicToolCall[],
+): AnthropicMessage {
+  return {
+    role: "assistant",
+    content: calls.map((c) => ({
+      type: "tool_use" as const,
+      id: c.id,
+      name: c.name,
+      input: c.input,
+    })),
+  };
+}
+
+/**
+ * 告诉模型**还剩多少**的那条回包（Anthropic 版：`tool_result` 是 user 消息里的块）。
+ *
+ * ⚠ 与 `toolResultMessage` 同样的免责：**实测里它从未被用到**
+ * （8/8 都是一轮答完）。保留它是因为成本极低，但不要声称它被验证过。
+ */
+export function anthropicToolResultMessage(
+  toolUseId: string,
+  accepted: readonly string[],
+  remaining: number,
+  remainingKeys: readonly string[],
+): AnthropicMessage {
+  return {
+    role: "user",
+    content: [
+      {
+        type: "tool_result",
+        tool_use_id: toolUseId,
+        content: JSON.stringify({ accepted, remaining, remaining_keys: remainingKeys }),
+      },
+    ],
   };
 }

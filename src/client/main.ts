@@ -791,6 +791,15 @@ async function evaluateRole(attempt: RoleAttempt): Promise<RoleOutcome> {
   // 长得一模一样，用户会去点重试。
   const backend = createBackend(clientConfigOf(role), {
     retry: retryPolicy(),
+    // ★ 构造时就要知道「这一次怎么谈」：`DecisionBackend.kind` 是**构造期定死**的
+    // （统计要按「后端 × 模型 × 调用配置」分组，而 JSON 输出与工具循环是两个
+    // 不同的东西）。请求上也带着同一份，那条路走 `req.llm ?? opts.llm` ——
+    // 这里传只是为了让 `kind` 说实话。漏传的症状是工具循环的调用被记进 JSON 那一栏，
+    // 而两栏混在一起算出来的平均值谁也不代表
+    ...(() => {
+      const llm = llmCallOf(role);
+      return llm === undefined ? {} : { llm };
+    })(),
     hooks: {
       onRetry: (n, _err, delay) => setLed("busy", "status.retrying", { n, s: (delay / 1000).toFixed(1) }),
     },
