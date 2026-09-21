@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>生命棋 × Jev</title>
+</head>
+<body>
+<!--
+  占位页 —— T14 会用真正的对局界面替换掉整个 body。
+
+  为什么需要它：tools/check-dom.ts 要读 public/index.html，文件不在时
+  readFileSync 直接抛异常，start.sh 在「检查 DOM id 一致性」这一步就断。
+  同时 src/server/server.ts 的占位实现要有个东西可托管，否则 ./start.sh
+  跑到底只能看到一个 404。
+
+  这里刻意保留一个 id（而不是干脆不写 id）：反向检查那条路径要有真实数据
+  才算跑过。T2 时 src/client/ 还是空的，所以它一定会出现在 check-dom.ts 的
+  「没有任何 TS 引用」清单里 —— 那是预期结果，不是待修的 bug。
+
+  刻意不写 <script type="module" src="js/main.js">：src/client/main.ts
+  要到 T14 才存在，现在挂上去就是一个必然 404 的死引用。
+-->
+<div id="app">
+  <h1>生命棋 × Jev</h1>
+  <p>占位页面。真正的对局界面在 T14 落到这里。</p>
+</div>
+</body>
+</html>
