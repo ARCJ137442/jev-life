@@ -215,9 +215,11 @@ export class ConfidenceChart {
     ctx.font = '9px ui-monospace, Menlo, monospace';
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    ctx.fillText("1.0", PAD_L + 1, PAD_T + 0.5);
+    // ★ 轴标签也用**整数百分比**（用户 2026-09-21 定）：纵轴是概率 0~1，
+    // 而 `1.0` / `0.0` 里的「.0」是纯冗余 —— 与态势图那两条界限线同一条口径
+    ctx.fillText("100%", PAD_L + 1, PAD_T + 0.5);
     ctx.textBaseline = "bottom";
-    ctx.fillText("0.0", PAD_L + 1, h - PAD_B - 0.5);
+    ctx.fillText("0%", PAD_L + 1, h - PAD_B - 0.5);
 
     // 至少要有一条**画得出线**的序列才算有数据：一条只有 1 个点的序列
     // 画出来是一个点，而「等待对局数据」才是这一屏真正想说的话
@@ -671,7 +673,11 @@ export class MomentumChart {
     ctx.font = "8px ui-monospace, Menlo, monospace";
     ctx.textAlign = "left";
     ctx.textBaseline = "bottom";
-    ctx.fillText(value.toFixed(2), MOM_PAD_X + 2, y - 1);
+    // ★ **整数百分比**（用户 2026-09-21 定）：`0.60` 里的「0.」是纯冗余 ——
+    // 这条线的语义本来就是「活细胞占几成」，而 `60%` 是它的直接读法。
+    // 取整而不是 `toFixed(1)`：阈值本身就是拿来试的整数百分比
+    // （界面上的输入框也只收整数），标出 `5.0%` 只会多一个没信息的小数位
+    ctx.fillText(`${Math.round(value * 100)}%`, MOM_PAD_X + 2, y - 1);
     ctx.globalAlpha = 1;
   }
 }

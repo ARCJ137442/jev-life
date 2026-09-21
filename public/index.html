@@ -626,6 +626,10 @@ textarea{resize:vertical}
       <div class="warnline" id="topoWarn" data-i18n="game.torusTiny"></div>
     </div>
 
+    <!-- 终局规则：回合上限 + **两条胜负线**。
+         ★ 胜负线在 T14 曾定成只读（怕四个可调项暗示它们标定过），2026-09-21
+         用户推翻了那个决定 —— 解法是**标注**而不是藏起来。所以下面那行
+         「占位值、未经跑分标定」始终显示，与四个输入框同屏。 -->
     <div class="field">
       <label data-i18n="game.rules">终局规则</label>
       <div class="slider-row">
@@ -634,6 +638,25 @@ textarea{resize:vertical}
       </div>
       <div class="tinylbl" data-i18n="game.turnLimitHint">到上限仍未分出胜负判和局。</div>
       <div class="warnline" id="turnLimitWarn" data-i18n="game.turnLimitWarn">回合上限必须是 1 以上的整数</div>
+
+      <div class="slider-row" style="margin-top:11px">
+        <span class="tinylbl" style="margin:0;color:var(--green)" data-i18n="game.lifeWin">生之执获胜线</span>
+        <input type="number" class="numin" id="inpLifeWin" min="0" max="100" step="1" value="30">
+        <span class="tinylbl" style="margin:0">%</span>
+        <span class="tinylbl" style="margin:0" data-i18n="game.streak">连续</span>
+        <input type="number" class="numin" id="inpLifeStreak" min="1" max="99" step="1" value="3">
+        <span class="tinylbl" style="margin:0" data-i18n="game.turns">回合</span>
+      </div>
+      <div class="slider-row" style="margin-top:7px">
+        <span class="tinylbl" style="margin:0;color:var(--red)" data-i18n="game.deathWin">死之执获胜线</span>
+        <input type="number" class="numin" id="inpDeathWin" min="0" max="100" step="1" value="5">
+        <span class="tinylbl" style="margin:0">%</span>
+        <span class="tinylbl" style="margin:0" data-i18n="game.streak">连续</span>
+        <input type="number" class="numin" id="inpDeathStreak" min="1" max="99" step="1" value="3">
+        <span class="tinylbl" style="margin:0" data-i18n="game.turns">回合</span>
+      </div>
+      <div class="tinylbl" data-i18n="game.winLineHint" style="margin-top:7px">活细胞占比越界且连续保持这么多回合才算赢 —— 生命游戏是混沌的，只看一代等于把胜负交给运气。</div>
+
       <div class="desc" id="rulesNote" style="margin-top:9px;margin-bottom:0"></div>
     </div>
 

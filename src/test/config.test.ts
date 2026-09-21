@@ -13,7 +13,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { clampOpeningId, clampSize, isPresetSize, presetFor } from "../client/config.js";
+import {
+  DEFAULT_DUEL,
+  clampOpeningId,
+  clampRatio,
+  clampSize,
+  clampStreak,
+  isPresetSize,
+  presetFor,
+  presetRulesFor,
+} from "../client/config.js";
 import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
 import { PRESETS } from "../core/presets.js";
 
@@ -95,4 +104,45 @@ test("presetFor 对非预设尺寸降级返回一个预设 —— 所以调用�
   // 界面的责任是把「该尺寸的参数未标定」显示出来，见 main.ts 的 syncGameUi
   assert.equal(presetFor(7, 11).cols, 8);
   assert.equal(isPresetSize(7, 11), false);
+});
+
+/* ═══════════ 胜负线 ═══════════ */
+
+test("胜负线：比例卡在 0~1，非法值回落到修改前的值（不是夹到边界）", () => {
+  assert.equal(clampRatio(0.3, 0.9), 0.3);
+  assert.equal(clampRatio(0, 0.9), 0, "0 是合法设置：一格都不许有");
+  assert.equal(clampRatio(1, 0.9), 1, "1 也是合法设置：占满才算赢");
+  assert.equal(clampRatio(1.5, 0.9), 1);
+  assert.equal(clampRatio(-1, 0.9), 0);
+  // 非法值回落，**不夹到边界** —— 夹边界看起来像生效了，用户会以为 200 是他自己填的
+  for (const bad of [Number.NaN, "", null, undefined, "abc"]) {
+    assert.equal(clampRatio(bad, 0.42), 0.42, `${String(bad)} 应当回落到 0.42`);
+  }
+});
+
+test("防抖轮数：下限 1，上限 99", () => {
+  assert.equal(clampStreak(3, 5), 3);
+  assert.equal(clampStreak(0, 5), 1, "0 轮 = 单代越界就判胜，那正是防抖要挡掉的");
+  assert.equal(clampStreak(-4, 5), 1);
+  assert.equal(clampStreak(1000, 5), 99);
+  for (const bad of [Number.NaN, "", null, "x"]) {
+    assert.equal(clampStreak(bad, 7), 7);
+  }
+});
+
+test("★ 预设的胜负线是出厂值的来源，且 4×4 与 8×8 **不共用**一条生之执线", () => {
+  // 0.30 在 4×4 上只等于「≥ 5 格」，而预设开局 beacon / toad 本来就是 6 格
+  // （37.5%）—— 一开局就已经越过胜负线。所以这一档单独取 0.5。
+  // 这一条钉的是「4×4 不参与跨尺寸比较」那条判断，别被后人顺手合并回去
+  const r4 = presetRulesFor(4, 4);
+  const r8 = presetRulesFor(8, 8);
+  assert.equal(r8.lifeWinRatio, 0.3);
+  assert.equal(r4.lifeWinRatio, 0.5);
+  assert.notEqual(r4.lifeWinRatio, r8.lifeWinRatio, "4×4 的线必须比 8×8 高");
+
+  // 出厂值取自预设，不是另一份字面量：抄一份的话，改预设时「恢复默认」不会跟着动
+  assert.equal(DEFAULT_DUEL.lifeWinRatio, r8.lifeWinRatio);
+  assert.equal(DEFAULT_DUEL.deathWinRatio, r8.deathWinRatio);
+  assert.equal(DEFAULT_DUEL.lifeStreak, r8.lifeStreak);
+  assert.equal(DEFAULT_DUEL.deathStreak, r8.deathStreak);
 });

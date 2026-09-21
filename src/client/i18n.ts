@@ -136,7 +136,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.colsTitle": "棋盘宽度（列数），2~16",
     "game.rowsTitle": "棋盘高度（行数），2~16",
     "game.sizeUncalibrated":
-      "⚠ 该尺寸的参数未标定：回合上限与胜负线是为 4/8/16 调的，套到这个尺寸上没有任何依据。该尺寸也没有开局库，只能自己画。",
+      "⚠ 该尺寸的参数未标定：回合上限与胜负线是为 4/8/16 调的，而小棋盘的分辨率粗 —— 4×4 上一格就是 6.25%，0.30 那条线落下去只等于「≥ 5 格」，预设开局本来就有 6 格，一开局就已经越线。这个尺寸上默认值会是什么效果没人知道，自己去「终局规则」里调。该尺寸也没有开局库，只能自己画。",
     "game.torusTiny":
       "⚠ 环绕拓扑 + 极小尺寸（2~3）：能算，但 rows = 2 时 r−1 与 r+1 是同一行，同一个格子会被重复计数 —— 结果是确定的，只是没有对应的几何直觉。",
     "game.topology": "边界拓扑",
@@ -147,8 +147,16 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.turnLimitHint": "到上限仍未分出胜负判和局。它会进入发给 Jev 的 state，所以改它会立即重开一局 —— 半局中改规则会让这一局的前后两半不可比。",
     "game.rulesNote":
       "胜负线：生之执 ≥ {life}% 连续 {ls} 回合；死之执 ≤ {death}% 连续 {ds} 回合。清空 / 占满棋盘、整盘推不动都会立即终局。",
-    "game.rulesUncalibrated": "⚠ 这些阈值全是占位值，未经跑分标定。",
+    "game.rulesUncalibrated": "⚠ 这些阈值全是占位值，未经跑分标定 —— 开放它们是为了能试，不是说它们已经准了。",
+    "game.rulesInverted":
+      "⚠ 死之执的线不低于生之执的线：判终局时生之执那条先判，倒挂会让死之执的线实际上永远轮不到。",
     "game.turnLimitWarn": "回合上限必须是 1 以上的整数",
+    "game.lifeWin": "生之执获胜线",
+    "game.deathWin": "死之执获胜线",
+    "game.streak": "连续",
+    "game.turns": "回合",
+    "game.winLineHint":
+      "活细胞占比越界且连续保持这么多回合才算赢 —— 生命游戏是混沌的，只看一代等于把胜负交给运气。这四个数会写进发给 Jev 的 state，所以改完立即重开一局。",
     "game.fx": "动效",
     "game.fxAnim": "落子与演化的缩放动画",
     "game.fxParticles": "落子处的发光粒子",
@@ -550,7 +558,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.colsTitle": "Board width (columns), 2–16",
     "game.rowsTitle": "Board height (rows), 2–16",
     "game.sizeUncalibrated":
-      "⚠ This size is uncalibrated: the turn limit and win lines were tuned for 4/8/16 and there is no basis for them at this size. There is no opening library either — draw your own.",
+      "⚠ This size is uncalibrated: the turn limit and win lines were tuned for 4/8/16, and a small board has coarse resolution — one cell on a 4×4 is 6.25%, so a line at 0.30 means “5 cells or more”, while the preset openings already start at 6 and are past the line on turn 0. Nobody knows what the defaults do at this size; adjust them under “End-of-game rules”. There is no opening library either — draw your own.",
     "game.torusTiny":
       "⚠ Torus topology at a tiny size (2–3): it computes, but with rows = 2 the row r−1 and the row r+1 are the same row, so a cell's neighbours are counted more than once — the result is well defined, it just has no matching geometric intuition.",
     "game.topology": "Boundary topology",
@@ -561,8 +569,16 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.turnLimitHint": "If nobody has won by then, the game is a draw. It is written into the state sent to Jev, so changing it restarts the game immediately — changing the rules mid-game would make the two halves incomparable.",
     "game.rulesNote":
       "Win lines: Life holds ≥ {life}% for {ls} turns; Death holds ≤ {death}% for {ds} turns. Emptying or filling the board, or a position that can no longer move, ends the game immediately.",
-    "game.rulesUncalibrated": "⚠ These thresholds are placeholders and have not been calibrated by benchmark runs.",
+    "game.rulesUncalibrated": "⚠ These thresholds are placeholders and have not been calibrated by benchmark runs — they are editable so you can experiment, not because they are now trustworthy.",
+    "game.rulesInverted":
+      "⚠ Death's line is not below Life's: the Life condition is tested first, so an inverted pair means Death's line can never actually trigger.",
     "game.turnLimitWarn": "The turn limit must be an integer of at least 1",
+    "game.lifeWin": "Life wins at",
+    "game.deathWin": "Death wins at",
+    "game.streak": "for",
+    "game.turns": "turns",
+    "game.winLineHint":
+      "A win needs the live-cell ratio to stay beyond the line for this many turns in a row — the Game of Life is chaotic, so judging on a single generation hands the result to luck. All four numbers are written into the state sent to Jev, so changing them restarts the game immediately.",
     "game.fx": "Effects",
     "game.fxAnim": "Scale animation for flips and evolutions",
     "game.fxParticles": "Glowing particles at the flipped cell",

@@ -19,7 +19,7 @@
  * 代价是「双侧同步」必须是一个**动作**（把 A 的玩家级设置整体复制到 B），
  * 否则每换一次对照都要手配两遍。见 `main.ts` 的 `syncRoleSettings()`。
  */
-import type { Role, Topology } from "../core/types.js";
+import type { GameRules, Role, Topology } from "../core/types.js";
 import { MAX_SIZE, MIN_SIZE } from "../core/types.js";
 // 只借它的**类型**：能力表（谁收哪些档位）住在 broker 里，界面不另抄一份
 // —— 抄一份的话，往能力表里加一个上游时界面会照旧标注「不支持」
@@ -91,6 +91,30 @@ export interface DuelSettings {
    * 但动画仍然按它自己的节奏演完）。
    */
   flipMs: number;
+
+  /* ══════════ 胜负线（对局级）══════════
+   *
+   * ★ **T14 曾把它们定成只读**，理由是「预设标着 `calibrated: false`，做成
+   * 四个可调项会暗示它们已经标定过」。那个顾虑仍然成立，但**解法不是藏起来、
+   * 而是标注**（用户 2026-09-21 定）：藏起来并不能让它变准，只会让人以为它
+   * 不可调。所以四个值开放，界面上同时明说「占位值、未经跑分标定」。
+   *
+   * 它们**进入发给 Jev 的 state**（`core/context.ts` 的 `win_condition` 与
+   * `termination_conditions` 都按它们现拼），所以改完重开一局，概率分布
+   * **应当**变化 —— 那是这一档设置的验收标准。
+   *
+   * 两条线倒挂（死之执的线 ≥ 生之执的线）不禁止，但界面会说明 —— 见
+   * `main.ts` 的 `syncGameUi`。禁止它要凭空替用户判断什么值「合理」，
+   * 而这四个数恰恰是拿来试的。
+   */
+
+  /** 活细胞占比 ≥ 此值且连续保持 lifeStreak 回合 → 生之执获胜 */
+  lifeWinRatio: number;
+  /** ≤ 此值且连续保持 deathStreak 回合 → 死之执获胜 */
+  deathWinRatio: number;
+  /** 防抖：连续越界多少回合才算赢。两侧分开，因为博弈本身不对称 */
+  lifeStreak: number;
+  deathStreak: number;
 }
 
 /* ══════════════ 玩家级 ══════════════ */
@@ -240,6 +264,12 @@ export const DEFAULT_DUEL: DuelSettings = {
   rows: DEFAULT_ROWS,
   topology: presetFor(DEFAULT_COLS, DEFAULT_ROWS).defaultTopology,
   turnLimit: defaultTurnLimit(DEFAULT_COLS, DEFAULT_ROWS),
+  // 胜负线的出厂值**取自预设**，不另写一份字面量：抄一份的话，改预设里的
+  // 阈值时这里不会跟着动，于是「恢复默认」得到的不是出厂那一局
+  lifeWinRatio: presetFor(DEFAULT_COLS, DEFAULT_ROWS).rules.lifeWinRatio,
+  deathWinRatio: presetFor(DEFAULT_COLS, DEFAULT_ROWS).rules.deathWinRatio,
+  lifeStreak: presetFor(DEFAULT_COLS, DEFAULT_ROWS).rules.lifeStreak,
+  deathStreak: presetFor(DEFAULT_COLS, DEFAULT_ROWS).rules.deathStreak,
   openingId: defaultOpeningId(DEFAULT_COLS, DEFAULT_ROWS),
   animations: true,
   particles: true,
@@ -310,6 +340,47 @@ export function clampTurnLimit(v: unknown, fallback: number): number {
   const n = Math.round(Number(v));
   if (!Number.isFinite(n)) return fallback;
   return Math.min(999, Math.max(1, n));
+}
+
+/**
+ * 胜负线（比例）。范围就是 0~1 —— 它是占比，超出这个范围没有意义。
+ *
+ * ⚠ **不在这里做「不含 0 也不含 1」之类的合理性判断**：0 与 1 都是合法的
+ * 极限设置（「一格都不许有」/「占满才算赢」），而 `classifyTermination`
+ * 对它们都有确定行为。替用户挡掉它们等于替用户判断什么值「合理」。
+ */
+export function clampRatio(v: unknown, fallback: number): number {
+  const n = parseNum(v);
+  if (n === null) return fallback;
+  return Math.min(1, Math.max(0, n));
+}
+
+/** 防抖轮数。下限 1：0 轮意味着「单代越界就判胜」，那正是防抖要挡掉的东西 */
+export function clampStreak(v: unknown, fallback: number): number {
+  const n = parseNum(v);
+  if (n === null) return fallback;
+  return Math.min(99, Math.max(1, Math.round(n)));
+}
+
+/**
+ * 「用户到底填了没有」—— 空串与 null/undefined 一律算**没填**，回落到原值。
+ *
+ * 这四个数上格外要紧：**0 是它们的合法取值**（「一格都不许有」），所以不能用
+ * 「0 是 falsy」那套老办法区分，只能显式判空。把「清空输入框」读成 0，会让
+ * 「删掉重打」这个动作顺手把胜负线改成一条极端的线，而且没有任何提示。
+ *
+ * （`clampPace` 记的是同一类坑的另一面：那边栽在 `Number(v) || 默认值`
+ * 把合法的 0 吞掉。）
+ */
+function parseNum(v: unknown): number | null {
+  if (v === "" || v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** 某一档尺寸的出厂规则。键名短，是为了下面那四行读起来还是「一列」 */
+export function presetRulesFor(cols: number, rows: number): GameRules {
+  return presetFor(cols, rows).rules;
 }
 
 /**
@@ -470,6 +541,10 @@ export function load(): Persisted {
       rows: size.rows,
       topology: clampTopology(rawDuel.topology, preset.defaultTopology),
       turnLimit: clampTurnLimit(rawDuel.turnLimit, preset.rules.turnLimit),
+      lifeWinRatio: clampRatio(rawDuel.lifeWinRatio, preset.rules.lifeWinRatio),
+      deathWinRatio: clampRatio(rawDuel.deathWinRatio, preset.rules.deathWinRatio),
+      lifeStreak: clampStreak(rawDuel.lifeStreak, preset.rules.lifeStreak),
+      deathStreak: clampStreak(rawDuel.deathStreak, preset.rules.deathStreak),
       openingId: clampOpeningId(rawDuel.openingId, size.cols, size.rows),
       animations: rawDuel.animations !== false,
       particles: rawDuel.particles !== false,

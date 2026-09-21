@@ -55,7 +55,9 @@ import {
   clampFlipMs,
   clampOpeningId,
   clampPace,
+  clampRatio,
   clampSize,
+  clampStreak,
   clampTurnLimit,
   defaultRole,
   isPresetSize,
@@ -323,14 +325,24 @@ function preset() {
 }
 
 /**
- * 当前生效的规则 = 预设的规则 + 界面上可改的回合上限。
+ * 当前生效的规则 —— **全部五项都取自 `store.duel`**，不再从预设现拼。
  *
- * 胜负线（`lifeWinRatio` 等）**不开放给界面改**：它们是占位值没错，但把它们
- * 做成四个滑块会让人以为那四个数已经标定过。预设里已经标了 `calibrated: false`，
- * 界面照实把它显示出来（见 `game.rulesUncalibrated`）。
+ * ⚠ **T14 曾把胜负线定成只读**，理由是「预设标着 `calibrated: false`，做成
+ * 四个可调项会暗示它们已经标定过」。那个顾虑仍然成立，但**解法不是藏起来、
+ * 而是标注**（用户 2026-09-21 定）：藏起来并不能让它变准。
+ *
+ * 换尺寸时这五项会被**整套重播**成新尺寸的预设值（见 `setSize`）—— 预设的意义
+ * 就是「一整套参数」，只搬其中几项会得到谁也没配过的组合。
  */
 function currentRules(): GameRules {
-  return { ...preset().rules, turnLimit: store.duel.turnLimit };
+  const d = store.duel;
+  return {
+    turnLimit: d.turnLimit,
+    lifeWinRatio: d.lifeWinRatio,
+    deathWinRatio: d.deathWinRatio,
+    lifeStreak: d.lifeStreak,
+    deathStreak: d.deathStreak,
+  };
 }
 
 /**
@@ -1633,9 +1645,20 @@ function setSize(cols: number, rows: number): void {
   store.duel.rows = rows;
   if (isPresetSize(cols, rows)) {
     const p = presetFor(cols, rows);
-    store.duel.turnLimit = p.rules.turnLimit;
-    store.duel.openingId = p.openings[0]?.id ?? "";
+    // 五项参数**整套**搬过来，不是只搬回合上限：预设的意义就是「一整套」，
+    // 只搬其中几项会得到谁也没配过的组合（例如 4×4 的 lifeWinRatio 0.5
+    // 配上 8×8 的回合上限 90）
+    Object.assign(store.duel, {
+      turnLimit: p.rules.turnLimit,
+      lifeWinRatio: p.rules.lifeWinRatio,
+      deathWinRatio: p.rules.deathWinRatio,
+      lifeStreak: p.rules.lifeStreak,
+      deathStreak: p.rules.deathStreak,
+      openingId: p.openings[0]?.id ?? "",
+    });
   } else {
+    // 非预设尺寸没有可回落的东西：开局落到「自定义（空白棋盘）」，五个参数
+    // 保持用户当前的值 —— 界面会同时标明这个尺寸的参数未标定
     store.duel.openingId = "";
   }
   save(store);
@@ -1746,6 +1769,13 @@ function syncGameUi(): void {
     (store.duel.cols <= 3 || store.duel.rows <= 3);
   $("topoWarn").style.display = tinyTorus ? "block" : "none";
 
+  // 胜负线是**玩家可填**的（用户 2026-09-21 定）。四个框存的都是**整数百分比**
+  // —— 与图上的标注同一套口径，省掉「0.30 到底是几成」那种心算
+  $<HTMLInputElement>("inpLifeWin").value = String(Math.round(store.duel.lifeWinRatio * 100));
+  $<HTMLInputElement>("inpLifeStreak").value = String(store.duel.lifeStreak);
+  $<HTMLInputElement>("inpDeathWin").value = String(Math.round(store.duel.deathWinRatio * 100));
+  $<HTMLInputElement>("inpDeathStreak").value = String(store.duel.deathStreak);
+
   const rules = currentRules();
   $("rulesNote").textContent =
     t("game.rulesNote", {
@@ -1754,8 +1784,15 @@ function syncGameUi(): void {
       death: Math.round(rules.deathWinRatio * 100),
       ds: rules.deathStreak,
     }) +
+    // 「占位、未标定」**始终**显示：三档预设的 calibrated 全是 false，
+    // 而那正是开放这四个框的前提 —— 不标就等于说它们可信
     " " +
-    (preset().calibrated ? "" : t("game.rulesUncalibrated"));
+    t("game.rulesUncalibrated") +
+    // 两条线倒挂：不禁止（这四个数本来就是拿来试的），但要说出来 ——
+    // 判终局时生之执那条先判，倒挂会让死之执的线实际上永远轮不到
+    (store.duel.deathWinRatio >= store.duel.lifeWinRatio
+      ? " " + t("game.rulesInverted")
+      : "");
 
   // 三个纯画面设置的**唯一**消费者（T14 里前两个没有任何消费者，只留了一句注释）。
   // 接在这里而不是散到各处：改了设置之后 `applyDuelSettings` 必定回到这里，
@@ -1765,6 +1802,17 @@ function syncGameUi(): void {
   renderer.flipMs = store.duel.flipMs;
   $<HTMLInputElement>("inpFlipMs").value = String(store.duel.flipMs);
   $("flipMsVal").textContent = paceLabel(store.duel.flipMs);
+}
+
+/**
+ * 读一个「整数百分比」输入框，换算回 0~1 的比例。
+ *
+ * 四个胜负线输入框存的都是百分比（与图上标注同一口径）。越界与非法值一律
+ * 回落到**修改前**的值，而不是夹到边界：夹边界看起来像生效了，用户会以为
+ * 「填 200 得到 100」是他自己填的。
+ */
+function pctField(id: string, fallback: number): number {
+  return clampRatio(Number($<HTMLInputElement>(id).value) / 100, fallback);
 }
 
 function validateTurnLimit(): boolean {
@@ -1791,6 +1839,10 @@ function applyDuelSettings(restart: boolean): void {
   const d = store.duel;
   d.topology = $<HTMLSelectElement>("inpTopology").value === "torus" ? "torus" : "bounded";
   d.turnLimit = clampTurnLimit($<HTMLInputElement>("inpTurnLimit").value, d.turnLimit);
+  d.lifeWinRatio = pctField("inpLifeWin", d.lifeWinRatio);
+  d.deathWinRatio = pctField("inpDeathWin", d.deathWinRatio);
+  d.lifeStreak = clampStreak($<HTMLInputElement>("inpLifeStreak").value, d.lifeStreak);
+  d.deathStreak = clampStreak($<HTMLInputElement>("inpDeathStreak").value, d.deathStreak);
   d.animations = $<HTMLInputElement>("inpAnim").checked;
   d.particles = $<HTMLInputElement>("inpParticles").checked;
   d.flipMs = clampFlipMs($<HTMLInputElement>("inpFlipMs").value);
@@ -1829,6 +1881,11 @@ function bindGameSettings(): void {
     $(id).addEventListener("change", applySizeInputs);
   }
   $("inpTopology").addEventListener("change", () => applyDuelSettings(true));
+  // 胜负线与回合上限同类：它们是**博弈定义**，改了就不是同一局（理由见
+  // applyDuelSettings 的注释）—— 半局中改胜负线会让这一局的前后两半不可比
+  for (const id of ["inpLifeWin", "inpLifeStreak", "inpDeathWin", "inpDeathStreak"]) {
+    $(id).addEventListener("change", () => applyDuelSettings(true));
+  }
   // 纯画面：改了不重开
   for (const id of ["inpAnim", "inpParticles"]) {
     $(id).addEventListener("change", () => applyDuelSettings(false));
@@ -1850,6 +1907,10 @@ function resetDuelSettings(): void {
   const p = presetFor(store.duel.cols, store.duel.rows);
   store.duel.topology = p.defaultTopology;
   store.duel.turnLimit = p.rules.turnLimit;
+  store.duel.lifeWinRatio = p.rules.lifeWinRatio;
+  store.duel.deathWinRatio = p.rules.deathWinRatio;
+  store.duel.lifeStreak = p.rules.lifeStreak;
+  store.duel.deathStreak = p.rules.deathStreak;
   // 自定义尺寸没有开局库，恢复默认同样落到「自定义」而不是某个 8×8 的开局
   store.duel.openingId = clampOpeningId(p.openings[0]?.id ?? "", store.duel.cols, store.duel.rows);
   store.duel.animations = true;
@@ -2239,6 +2300,11 @@ function applyImported(text: string, expect: ArchiveKind): void {
         rows: size.rows,
         topology: r.duel.topology === "torus" ? "torus" : hit.defaultTopology,
         turnLimit: clampTurnLimit(r.duel.turnLimit, hit.rules.turnLimit),
+        // 胜负线也过 clamp：导入的档案不比自己配的宽松（同一条纪律）
+        lifeWinRatio: clampRatio(r.duel.lifeWinRatio, hit.rules.lifeWinRatio),
+        deathWinRatio: clampRatio(r.duel.deathWinRatio, hit.rules.deathWinRatio),
+        lifeStreak: clampStreak(r.duel.lifeStreak, hit.rules.lifeStreak),
+        deathStreak: clampStreak(r.duel.deathStreak, hit.rules.deathStreak),
         openingId: clampOpeningId(r.duel.openingId, size.cols, size.rows),
         animations: r.duel.animations !== false,
         particles: r.duel.particles !== false,
@@ -2627,6 +2693,7 @@ function boot(): void {
     "scrim", "dGame", "dStrategy", "dApi", "dLog", "dArchive", "toast", "fileInput",
     "sizeList", "inpCols", "inpRows", "sizeNote", "inpTopology", "topoWarn",
     "inpTurnLimit", "turnLimitWarn", "rulesNote",
+    "inpLifeWin", "inpLifeStreak", "inpDeathWin", "inpDeathStreak",
     "openingList", "inpAnim", "inpParticles", "inpFlipMs", "flipMsVal", "bGameReset", "bGameDone",
     "roleHint", "ruleNote", "hintText", "inpPredict", "inpDetect",
     "inpMemory", "memoryVal", "bMemMax", "inpStrategy", "thresholdRow",

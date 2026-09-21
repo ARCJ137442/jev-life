@@ -429,9 +429,16 @@ test("生死态势图：三条界限线都画了，越界时线头带计数的�
   // 两条界限线用各自角色的颜色，中线是中性色 —— 颜色是这张图唯一的图例
   assert.ok(ctx.strokes.includes(PALETTE.life), "没有画生之执界限");
   assert.ok(ctx.strokes.includes(PALETTE.death), "没有画死之执界限");
-  // 阈值标签：0.60 / 0.50 / 0.05
-  assert.ok(ctx.texts.includes("0.60"), `没有标出生之执界限：${ctx.texts.join(",")}`);
-  assert.ok(ctx.texts.includes("0.05"), "没有标出死之执界限");
+  // 阈值标签是**整数百分比**（用户 2026-09-21 定）：60% / 50% / 5%。
+  // 早先标的是 0.60 / 0.50 / 0.05 —— 那个「0.」是纯冗余，而这条线的语义
+  // 本来就是「活细胞占几成」
+  assert.ok(ctx.texts.includes("60%"), `没有标出生之执界限：${ctx.texts.join(",")}`);
+  assert.ok(ctx.texts.includes("50%"), `没有标出中线：${ctx.texts.join(",")}`);
+  assert.ok(ctx.texts.includes("5%"), "没有标出死之执界限");
+  assert.ok(
+    !ctx.texts.some((x) => /^\d+\.\d+$/.test(x)),
+    `图上还有小数形式的标签：${ctx.texts.join(",")}`,
+  );
 
   // 末尾两个点 0.04、0.01 都在死之执的界限（0.05）之下 → 连续越界 2 轮。
   // 线头应当是个带「2」的圆点，颜色与死之执的界限一致（红）
