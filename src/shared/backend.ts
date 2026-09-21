@@ -131,6 +131,19 @@ export interface LlmCallOptions {
    * 把它与「客户端根本没传」混成一件事，那个选项就永远送不出去。
    */
   readonly effort?: LlmReasoningEffort | null;
+  /**
+   * 调用策略：`json`（一次调用，形状靠提示词约束）或 `tool`（工具循环，形状靠
+   * schema 强制）。
+   *
+   * 它只影响**服务端怎么向上游发请求**（`response_format` 还是 `tools`），
+   * 所以和 `effort` 一样必须跟着请求体走一趟 —— 客户端的 `DecisionRequest`
+   * 对两种策略完全一致，这正是四层架构里「中间那层必须真的兼容」要的效果。
+   *
+   * **省略即 `json`**：与服务端「认不出的值一律回落到 json」是同一条安全默认。
+   * 这里不做三态 —— 「用哪种协议」没有「不表态」这个语义，
+   * 而 `effort` 的第三态（`null` = 别发这个字段）是有实测依据的明确选择。
+   */
+  readonly callPolicy?: "json" | "tool";
 }
 
 export interface DecisionRequest {
@@ -300,8 +313,10 @@ function readUsage(data: JevResponse): TokenUsage | null {
   return {
     inputTokens: u.inputTokens ?? u.input_tokens ?? 0,
     outputTokens: u.outputTokens ?? u.output_tokens ?? 0,
-    // 这一栏**没有 null 形态**：没报就是 0。理由见 TokenUsage 的注释
-    reasoningTokens: u.completion_tokens_details?.reasoning_tokens ?? 0,
+    // 这一栏**没有 null 形态**：没报就是 0。理由见 TokenUsage 的注释。
+    // 两种拼写都认：本项目的代理发驼峰，直连厂商时是 OpenAI 的嵌套形态
+    reasoningTokens:
+      u.reasoningTokens ?? u.completion_tokens_details?.reasoning_tokens ?? 0,
   };
 }
 
@@ -393,7 +408,9 @@ async function callOnce(
   return {
     answers: data.answers,
     latencyMs: 0, // 由 callJev 覆盖：单次请求的耗时不是要测的那个数
-    upstreamCalls: 1,
+    // ★ 代理如实报了几次就记几次，**不硬编码 1**：工具循环的一次「尝试」
+    // 内部可能已经发了 N 次上游请求（见 JevResponse.upstreamCalls）
+    upstreamCalls: data.upstreamCalls ?? 1,
     usage,
     // 上游没报 usage ⟹ 无法计价 ⟹ null。**不是 0**
     costUsd: usage === null ? null : estimateCost(usage.inputTokens),
@@ -442,11 +459,18 @@ export async function callJev(
   let calls = 0;
 
   for (;;) {
-    calls++;
     try {
       const r = await callOnce(cfg, state, questions, fetchImpl, timeoutMs, model, opts.llm);
+      // ★ **累加**而不是自增：一次「尝试」内部可能就发了 N 次上游请求 ——
+      // 工具循环正是如此。这个数字是与 Jev 对比的头条指标，
+      // 把它按「我发了一次 HTTP」记成 1，等于把工具循环的成本藏起来
+      calls += r.upstreamCalls;
       return { ...r, latencyMs: Date.now() - startedAt, upstreamCalls: calls };
     } catch (e) {
+      // 失败的尝试同样发出去过请求（而且可能发了好几次）。这一层数不到工具
+      // 循环内部的次数 —— 只在**成功**的回包里才知道 —— 所以按 1 记。
+      // 宁可少算也不虚报：上限由重试次数兜着，而少算的方向是保守的
+      calls++;
       const err = e instanceof JevError ? e : new JevError(String(e), undefined, false);
       const max = retry.max;
       const canRetry = err.retryable && (max === null || attempt < max);

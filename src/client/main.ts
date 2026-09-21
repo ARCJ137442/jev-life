@@ -2223,7 +2223,10 @@ function applyBackendGating(provider: BackendId): void {
 function llmCallOf(role: Role): LlmCallOptions | undefined {
   const s = store.roles[role];
   if (!BACKENDS[s.provider].isLlm) return undefined;
-  return { effort: desiredEffort(s) };
+  // ★ `callPolicy` 必须跟着走。它曾经只存进配置、只画在界面上，**没有任何
+  // 消费者** —— 「界面上有、实际不生效」正是这个项目最该防的那一类：
+  // 用户下拉选了「工具循环」，实际什么都不变，而症状离原因很远
+  return { effort: desiredEffort(s), callPolicy: s.callPolicy };
 }
 
 /**

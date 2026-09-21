@@ -327,3 +327,328 @@ test("本机 server.ts 的转发路径也接了归一化 —— 漏一处就是�
     "server.ts 调用了归一化，但传的不是 up.upstream（上游表里的真实上游）",
   );
 });
+
+/* ══════════════════════════════════════════════════════════════════
+   转发点 3：工具循环（`callPolicy = "tool"`）—— 两个转发点都要接
+   ══════════════════════════════════════════════════════════════════
+
+   循环本身**不属于 broker**（broker 是纯函数，不碰网络），它落在发请求的那一层。
+   这里测的是 `api/_upstream.ts` 那一份；`src/server/server.ts` 那一份是同源的
+   重复，按本文件既有的做法用「读源码」的机械守卫兜住（末尾那条）。
+
+   形状依据 `../llm-lab/batch.mjs` —— 实测脚本，8/8 全成功、上游调用恒为 1。 */
+
+interface LlmUp extends ApiUpstream {
+  kind?: "systemone" | "llm";
+}
+
+const AGNES_UP: LlmUp = {
+  label: "llm-free-trial",
+  url: "https://apihub.agnes-ai.com/v1/chat/completions",
+  envKey: "AGNES_API_KEY",
+  model: "agnes-2.5-flash",
+  upstream: "agnes",
+  kind: "llm",
+};
+
+/** 一次工具调用的回包 —— 形状照抄实测脚本真正收到的那个 */
+function toolReply(calls: { id: string; args: unknown }[], finish = "tool_calls"): string {
+  return JSON.stringify({
+    choices: [
+      {
+        message: {
+          content: null,
+          tool_calls: calls.map((c) => ({
+            id: c.id,
+            type: "function",
+            function: {
+              name: "answer_questions",
+              arguments: typeof c.args === "string" ? c.args : JSON.stringify(c.args),
+            },
+          })),
+        },
+        finish_reason: finish,
+      },
+    ],
+    usage: { prompt_tokens: 100, completion_tokens: 20 },
+  });
+}
+
+/** 某个 key 的 tool 调用参数 */
+function answersOf(entries: [string, number][]): { answers: { key: string; value: number }[] } {
+  return { answers: entries.map(([key, value]) => ({ key, value })) };
+}
+
+interface ToolRun {
+  code: number;
+  body: Record<string, any>;
+  /** 真正发出去的每一个请求体，按顺序 */
+  sent: Record<string, any>[];
+}
+
+/**
+ * 跑一次 handler，把**每一轮**发给上游的请求都截下来。
+ *
+ * `script` 按顺序给出上游的每一个回包 —— 长度不够时抛错，免得「只写了一轮
+ * 的脚本」被静默当成「循环只跑了一轮」。
+ */
+async function runToolLoop(
+  up: LlmUp,
+  questions: Questions,
+  script: { status?: number; text: string }[],
+  /** 请求体里的 `llm` 字段。`null` = **整个字段不出现**（老客户端 / 非 LLM 后端） */
+  llmBody: Record<string, unknown> | null = { callPolicy: "tool" },
+): Promise<ToolRun> {
+  const makeHandler = await loadMakeHandler();
+  const handler = makeHandler(up);
+
+  process.env[up.envKey] = "vck_TESTONLY_not_a_real_key";
+
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  const realError = console.error;
+  const sent: Record<string, any>[] = [];
+  let i = 0;
+  console.log = () => {};
+  console.error = () => {};
+  globalThis.fetch = (async (_url: string | URL, init?: RequestInit) => {
+    sent.push(JSON.parse(String(init?.body)) as Record<string, any>);
+    const step = script[i++];
+    assert.ok(step, `上游被调用了 ${i} 次，但脚本只写了 ${script.length} 轮 —— 循环没有按预期收敛`);
+    return new Response(step.text, {
+      status: step.status ?? 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const { code, body, res } = recorder();
+    await handler(
+      {
+        method: "POST",
+        body: { ...requestBody(questions), ...(llmBody === null ? {} : { llm: llmBody }) },
+      },
+      res,
+    );
+    return { code: code(), body: JSON.parse(body() || "{}") as Record<string, any>, sent };
+  } finally {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+    console.error = realError;
+  }
+}
+
+test("★ 工具循环：模型一轮全答完时，上游只被调用一次（实测 8/8 都是这样）", async () => {
+  const qs = { flip_1_1: boolQuestion("noul"), flip_1_2: boolQuestion("noul") };
+  const { code, body, sent } = await runToolLoop(AGNES_UP, qs, [
+    { text: toolReply([{ id: "c1", args: answersOf([["flip_1_1", 0.7], ["flip_1_2", 0.2]]) }]) },
+  ]);
+
+  assert.equal(code, 200);
+  assert.equal(sent.length, 1, "一轮答完就该只发一次 —— 多发的每一次都进 upstreamCalls");
+  // 回包是 **Jev 形状**：客户端看不出对面是 LLM
+  assert.deepEqual(Object.keys(body["answers"]).sort(), ["flip_1_1", "flip_1_2"]);
+  assert.equal(body["answers"]["flip_1_1"].noul, 0.7);
+  // ★ 上游调用次数要如实回给客户端 —— 它正是与 Jev 对比的那个头条数字
+  assert.equal(body["upstreamCalls"], 1);
+  // 推理 token 单独记账（这一栏恒为 0 的那次是探针的锅，不是这里的）
+  assert.equal(body["usage"]["reasoningTokens"], 0);
+});
+
+test("★ 工具循环：上游调用次数跨轮累加，token 也累加", async () => {
+  const qs = { flip_1_1: boolQuestion("noul"), flip_1_2: boolQuestion("noul") };
+  const { body, sent } = await runToolLoop(AGNES_UP, qs, [
+    { text: toolReply([{ id: "c1", args: answersOf([["flip_1_1", 0.7]]) }]) },
+    { text: toolReply([{ id: "c2", args: answersOf([["flip_1_2", 0.3]]) }]) },
+  ]);
+
+  assert.equal(sent.length, 2);
+  assert.equal(body["upstreamCalls"], 2, "两轮就是两次上游调用，不能只记 1");
+  assert.equal(body["usage"]["inputTokens"], 200, "两轮的 token 要累加");
+  assert.equal(body["usage"]["outputTokens"], 40);
+  assert.deepEqual(Object.keys(body["answers"]).sort(), ["flip_1_1", "flip_1_2"]);
+});
+
+test("★ 第二轮请求里带着 assistant 的 tool_calls 与 tool 回包（含 remaining）", async () => {
+  const qs = { flip_1_1: boolQuestion("noul"), flip_1_2: boolQuestion("noul") };
+  const { sent } = await runToolLoop(AGNES_UP, qs, [
+    { text: toolReply([{ id: "c1", args: answersOf([["flip_1_1", 0.7]]) }]) },
+    { text: toolReply([{ id: "c2", args: answersOf([["flip_1_2", 0.3]]) }]) },
+  ]);
+
+  const msgs = sent[1]["messages"] as Record<string, any>[];
+  const assistant = msgs.find((m) => m.role === "assistant");
+  assert.ok(assistant, "没有回述 assistant 的 tool_calls —— 上游会拒收随后的 tool 消息");
+  assert.equal(assistant.tool_calls[0].id, "c1");
+
+  const tool = msgs.find((m) => m.role === "tool");
+  assert.ok(tool);
+  assert.equal(tool.tool_call_id, "c1");
+  const told = JSON.parse(tool.content as string) as Record<string, any>;
+  assert.deepEqual(told["accepted"], ["flip_1_1"]);
+  assert.equal(told["remaining"], 1, "回包要告诉它还剩几题");
+  assert.deepEqual(told["remaining_keys"], ["flip_1_2"]);
+});
+
+test("★ 工具路径也先看 HTTP 状态码：429 透传 429，不当成「模型没答」", async () => {
+  // 这是踩过的坑：请求根本没被受理，在统计上表现成了「模型不行」
+  const qs = { flip_1_1: boolQuestion("noul") };
+  const { code, body } = await runToolLoop(AGNES_UP, qs, [{ status: 429, text: '{"error":"rate"}' }]);
+  assert.equal(code, 429, "429 被吞成了 502 —— 限流会被算进「模型不行」");
+  assert.match(body["error"]["message"], /额度|限流/);
+});
+
+test("★ 工具路径：空 content + finish_reason=length 当失败（502），不是「答了 0 题」", async () => {
+  const qs = { flip_1_1: boolQuestion("noul") };
+  const { code } = await runToolLoop(AGNES_UP, qs, [
+    { text: JSON.stringify({ choices: [{ message: { content: "" }, finish_reason: "length" }] }) },
+  ]);
+  assert.equal(code, 502, "预算被推理吃光必须当失败 —— 静默放行会让它流进统计表现成「模型不行」");
+});
+
+test("工具路径：上游回了文字而不是 tool_call → 502", async () => {
+  const qs = { flip_1_1: boolQuestion("noul") };
+  const { code } = await runToolLoop(AGNES_UP, qs, [
+    { text: JSON.stringify({ choices: [{ message: { content: "我觉得可以" }, finish_reason: "stop" }] }) },
+  ]);
+  assert.equal(code, 502);
+});
+
+test("工具路径：max_tokens 与 reasoning_effort 沿用 JSON 路径同一套收敛", async () => {
+  const qs = { flip_1_1: boolQuestion("noul") };
+  const { sent } = await runToolLoop(AGNES_UP, qs, [
+    { text: toolReply([{ id: "c1", args: answersOf([["flip_1_1", 0.7]]) }]) },
+  ]);
+  assert.equal(sent[0]["reasoning_effort"], "none", "工具路径同样默认关思维链");
+  assert.ok(!("response_format" in sent[0]), "工具路径不该带 response_format");
+  assert.equal(sent[0]["tool_choice"], "auto");
+  assert.equal(sent[0]["tools"][0]["function"]["name"], "answer_questions");
+});
+
+test("callPolicy 缺省（没传 llm）时仍走 JSON 老路 —— 默认不能被改掉", async () => {
+  const qs = { flip_2_2: boolQuestion("noul") };
+  const { sent } = await runToolLoop(
+    AGNES_UP,
+    qs,
+    [{ text: JSON.stringify({ choices: [{ message: { content: '{"answers":[]}' } }], usage: {} }) }],
+    null,
+  );
+  assert.equal(sent[0]["response_format"]["type"], "json_object");
+  assert.ok(!("tools" in sent[0]), "没选工具循环却发了 tools");
+});
+
+test("callPolicy 是认不出的值时回落到 JSON，而不是回落到工具循环", async () => {
+  // 安全默认的方向：老服务端收到没见过的值，只该退回到它本来就懂的那条路
+  const qs = { flip_2_2: boolQuestion("noul") };
+  const { sent } = await runToolLoop(
+    AGNES_UP,
+    qs,
+    [{ text: JSON.stringify({ choices: [{ message: { content: '{"answers":[]}' } }], usage: {} }) }],
+    { callPolicy: "某个还没实现的策略" },
+  );
+  assert.equal(sent[0]["response_format"]["type"], "json_object");
+  assert.ok(!("tools" in sent[0]));
+});
+
+test("callPolicy = json 时也走 JSON 老路（显式选择）", async () => {
+  const qs = { flip_2_2: boolQuestion("noul") };
+  const makeHandler = await loadMakeHandler();
+  const handler = makeHandler(AGNES_UP);
+  process.env[AGNES_UP.envKey] = "vck_TESTONLY_not_a_real_key";
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  const realError = console.error;
+  const sent: Record<string, any>[] = [];
+  console.log = () => {};
+  console.error = () => {};
+  globalThis.fetch = (async (_u: string | URL, init?: RequestInit) => {
+    sent.push(JSON.parse(String(init?.body)) as Record<string, any>);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"answers":[]}' } }] }), {
+      status: 200,
+    });
+  }) as typeof fetch;
+  try {
+    const { res } = recorder();
+    await handler(
+      { method: "POST", body: { ...requestBody(qs), llm: { callPolicy: "json" } } },
+      res,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+    console.error = realError;
+  }
+  assert.equal(sent[0]["response_format"]["type"], "json_object");
+  assert.ok(!("tools" in sent[0]));
+});
+
+test("本机 server.ts 也接了工具循环 —— 漏一处就是「本机好用、Vercel 上不对」", () => {
+  const src = readFileSync(join(ROOT, "src", "server", "server.ts"), "utf8");
+  assert.ok(
+    /callPolicy/.test(src),
+    "server.ts 没有读 callPolicy —— 本机这条工具循环没接线",
+  );
+  assert.ok(
+    /buildToolRequest\s*\(/.test(src),
+    "server.ts 没有调用 buildToolRequest —— 工具路径在本机不存在",
+  );
+  assert.ok(
+    /extractToolCalls\s*\(/.test(src),
+    "server.ts 没有调用 extractToolCalls —— 工具路径的空 content 失败模式拦不住",
+  );
+
+  // ⚠ 上面三条只证明「调用在」，证明不了「参数对」—— 本文件开头就写明了这个
+  // 局限。下面三条把**参数**也钉住：本机那份没有行为测试（它 import 即 listen），
+  // 所以这是唯一能挡住「调用写对了但参数传错」的手段。
+  // 加这三条的直接理由：变异测试里把 remaining 改成恒 0，**330 条测试全绿**
+  assert.ok(
+    /toolResultMessage\(\s*tc\.id,\s*accepted,\s*pending\.size,\s*\[\.\.\.pending\]\s*\)/.test(src),
+    "server.ts 的 tool 回包没有如实带 pending.size / [...pending] —— 模型会以为已经答完了",
+  );
+  assert.ok(/calls\+\+/.test(src), "server.ts 的工具循环没有给 calls 计数 —— upstreamCalls 会少算");
+  assert.ok(
+    /reasoningTokens \+= u\.reasoningTokens/.test(src),
+    "server.ts 没有累加推理 token —— 「关思维链省了多少钱」在本机这条路上算不出来",
+  );
+  assert.ok(
+    /if \(upstream\.status !== 200\) throw new UpstreamStatusError/.test(src),
+    "server.ts 的工具循环没有先看状态码 —— 429 会被算成「模型没答」（硬性要求第 1 条）",
+  );
+});
+
+test("★ 工具路径：连不上上游不能报成「上游没有给出可用的答案」", async () => {
+  // 实测踩到过：网络抖了一下，用户看到的是「上游没有给出可用的答案」，
+  // 于是去调提示词 —— 而真正的原因是请求根本没发出去。
+  // 与硬性要求第 1 条（429 不能算成「模型没答」）是同一条道理
+  const makeHandler = await loadMakeHandler();
+  const handler = makeHandler(AGNES_UP);
+  process.env[AGNES_UP.envKey] = "vck_TESTONLY_not_a_real_key";
+
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  const realError = console.error;
+  console.log = () => {};
+  console.error = () => {};
+  globalThis.fetch = (async () => {
+    const e = new TypeError("fetch failed");
+    (e as { cause?: unknown }).cause = { code: "ECONNREFUSED" };
+    throw e;
+  }) as typeof fetch;
+
+  try {
+    const { code, body, res } = recorder();
+    await handler(
+      { method: "POST", body: { ...requestBody({ flip_1_1: boolQuestion("noul") }), llm: { callPolicy: "tool" } } },
+      res,
+    );
+    assert.equal(code(), 502);
+    const msg = JSON.parse(body()).error.message as string;
+    assert.match(msg, /无法连接/, `连接失败被错报成了：${msg}`);
+    assert.ok(!/没有给出可用的答案/.test(msg), `连接失败被错报成了「模型没答」：${msg}`);
+    assert.match(msg, /ECONNREFUSED/, "cause 里的真实原因要带上，否则没法排查");
+  } finally {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+    console.error = realError;
+  }
+});

@@ -44,8 +44,25 @@ export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
    ══════════════════════════════════════════════════════════════════ */
 
 export interface LlmMessage {
-  readonly role: "system" | "user";
-  readonly content: string;
+  readonly role: "system" | "user" | "assistant" | "tool";
+  readonly content: string | null;
+  /** 只有 assistant 消息有：它必须**原样回述**，否则上游会拒收随后的 tool 消息 */
+  readonly tool_calls?: readonly LlmToolCallWire[];
+  /** 只有 tool 消息有：对应哪一次 tool_call */
+  readonly tool_call_id?: string;
+}
+
+/**
+ * 线上形态的 tool_call —— 回包里的原样形状，**与 `LlmToolCall` 不是一回事**。
+ *
+ * 分两个类型是因为它们的用途相反：`LlmToolCallWire` 是「上游发来的原文」，
+ * 而 `LlmToolCall` 是「我们要回述出去的东西」。回述时**必须带上 `type: "function"`**
+ * —— 少了它上游会拒收整个会话。
+ */
+export interface LlmToolCallWire {
+  readonly id: string;
+  readonly type: "function";
+  readonly function: { readonly name: string; readonly arguments: string };
 }
 
 export interface LlmRequest {
@@ -125,6 +142,23 @@ export function clampEffort(
   return cap.reasoningEfforts.includes(desired) ? desired : undefined;
 }
 
+/**
+ * 三态 effort → 最终下发的那个值（或 `undefined` = 不发）。
+ *
+ * ★ **两条调用策略（JSON / 工具循环）必须走同一个函数。** 思考强度的收敛是
+ * 「这个上游收什么」的知识，与「用哪种协议问」无关；各写一份迟早会走样，
+ * 而走样的症状是「换一个调用策略，思维链开关就失灵了」——离原因很远。
+ *
+ * 三态的理由见 `toLlmRequest` 的 `opts.effort`：省略 → 默认姿态 `none`；
+ * `null` → 明确要求不发（**连能力表都不查**）；档位 → 过能力表。
+ */
+export function resolveEffort(
+  desired: LlmReasoningEffort | null | undefined,
+  upstream: string,
+): LlmReasoningEffort | undefined {
+  return desired === null ? undefined : clampEffort(desired ?? "none", upstream);
+}
+
 /** 默认的输出上限。够 64 个布尔答案，又不会被无限推理拖住 */
 export const DEFAULT_MAX_TOKENS = 4000;
 
@@ -188,11 +222,7 @@ export function toLlmRequest(
 
   // 关思维链是**默认姿态**（实测依据见文件头）。上游不认识这个字段就**整个不发** ——
   // 不能回落到 "none"：那是在猜它能收，而猜错的代价是整个请求 400。
-  //
-  // 调用方显式给 `null` 时**直接不发**，连能力表都不查：那是「用上游自己的默认」
-  // 这个明确要求，与「默认姿态是 none」不是一回事（见 opts.effort 的注释）。
-  const effort =
-    opts.effort === null ? undefined : clampEffort(opts.effort ?? "none", opts.upstream);
+  const effort = resolveEffort(opts.effort, opts.upstream);
 
   return {
     model,
@@ -385,6 +415,301 @@ export interface LlmUsage {
    * 「不知道价格」和「没有推理」是两回事。
    */
   readonly reasoningTokens: number;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   工具循环路径（`callPolicy = "tool"`）
+   ══════════════════════════════════════════════════════════════════
+
+   ★ **循环本身不在这里。** broker 是纯函数：不碰网络、不碰 DOM、不读环境变量。
+   所以这里只有三块积木 —— 拼请求、解析 tool_call、拼回包消息 ——
+   而 `for` 那个循环落在真正发请求的那一层（`src/server/server.ts` 与
+   `api/_upstream.ts`，两处同源的重复）。
+
+   实测依据（`docs/llm-backends.md` 第三节）：
+
+   - N = 1/6/12/24 各 2 次，**8/8 全成功、上游调用次数恒为 1** ——
+     模型总是选择一轮全答完。所以这里**不主动限制每轮批量**，
+     由模型自己在「省往返」与「稳妥」之间权衡，而那个权衡本身就是要测的东西
+   - 于是 `remaining` 回包**在实测里从未被用到**（第二轮都没进过）。
+     **保留它**（低成本保险），但**不要声称它被验证过** ——
+     要测它得构造一个必然分多轮的场面（N 远大于单次输出上限）
+*/
+
+/** 工具名。**它来自实测脚本，不是一个随手的命名** —— 改了等于换一个实验条件 */
+export const ANSWER_TOOL_NAME = "answer_questions";
+
+/**
+ * 工具定义。
+ *
+ * ⚠ `parameters` 是**真的 JSON Schema**，不是 `DESIGN.md` 第八节那段简化示意 ——
+ * 后者是写给人读的（`{"answers":[{...}]}` 这种写法上游不认）。
+ * 这里的形状与 `../llm-lab/batch.mjs` 逐字一致，因为那份是跑通过的。
+ *
+ * `minItems: 1` 是「一次可答 ≥1 个」那条设计的落点。**刻意不设 `maxItems`** ——
+ * 卡成 1 的话 24 题就是 24 次往返，而实测模型自己会收敛到「一轮全答」。
+ */
+export function answerTool(): LlmToolDefinition {
+  return {
+    type: "function",
+    function: {
+      name: ANSWER_TOOL_NAME,
+      description:
+        "回答一个或多个问题。可以一次只答一个，也可以一次答多个。" +
+        "key 必须是题目给定的原样标识符，value 是判断的概率（0 到 1）。",
+      parameters: {
+        type: "object",
+        properties: {
+          answers: {
+            type: "array",
+            minItems: 1,
+            description: "本轮要回答的问题，至少要有一条",
+            items: {
+              type: "object",
+              properties: {
+                key: { type: "string", description: "题目的原样标识符" },
+                value: { type: "number", description: "判断的概率，0 到 1" },
+              },
+              required: ["key", "value"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["answers"],
+        additionalProperties: false,
+      },
+    },
+  };
+}
+
+/** 一次工具调用的形状，从上游回包里取出来之后的样子 */
+export interface LlmToolCall {
+  readonly id: string;
+  readonly name: string;
+  /** 原始 arguments 字符串，**未解析** —— 解析要按 questions 过滤，属于下一步 */
+  readonly argumentsJson: string;
+}
+
+export interface LlmToolDefinition {
+  readonly type: "function";
+  readonly function: {
+    readonly name: string;
+    readonly description: string;
+    readonly parameters: Record<string, unknown>;
+  };
+}
+
+export interface LlmToolRequest {
+  readonly model: string;
+  readonly messages: readonly LlmMessage[];
+  readonly tools: readonly LlmToolDefinition[];
+  /** `auto`：把「这轮答几个、要不要答」交给模型 —— 实测它就收敛到一轮全答 */
+  readonly tool_choice: "auto";
+  readonly max_tokens: number;
+  /** 与 JSON 路径同一套收敛，见 `resolveEffort` */
+  readonly reasoning_effort?: LlmReasoningEffort;
+}
+
+const TOOL_SHAPE =
+  `用 ${ANSWER_TOOL_NAME} 工具回答问题。可以一次只答一个，也可以一次答多个；` +
+  "key 必须原样返回。每次调用后我会告诉你还剩几题。";
+
+/**
+ * Jev 形状 → LLM 工具调用形状。
+ *
+ * 与 `toLlmRequest` 的差别只有两处：**不带 `response_format`**（形状改由 schema
+ * 约束），以及带 `tools` / `tool_choice`。`response_format` 与 `tools` 是两条互斥
+ * 的路，同时发出去上游行为如何**没有实测过** —— 不拿没测过的组合去跑对照实验。
+ *
+ * 纯函数：不改动入参。
+ */
+export function buildToolRequest(
+  model: string,
+  state: unknown,
+  questions: Questions,
+  opts: {
+    readonly upstream: string;
+    /** 三态，语义与 `toLlmRequest` 完全一致（见那里的注释） */
+    readonly effort?: LlmReasoningEffort | null;
+    readonly maxTokens?: number;
+  },
+): LlmToolRequest {
+  const keys = Object.keys(questions);
+  const lines = keys.map((k) => `- ${k}: ${questionText(questions[k])}`);
+
+  const user = [
+    "当前局面：",
+    JSON.stringify(state, null, 1),
+    "",
+    `请回答以下 ${keys.length} 个问题：`,
+    ...lines,
+  ].join("\n");
+
+  // 这一行与 toLlmRequest 判的是同一件事：调用方**显式传了 `"none"`**
+  const system = [
+    SYS_PREFIX,
+    opts.effort === "none" ? "直接给出答案，不要展开推理过程。" : "",
+    TOOL_SHAPE,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const effort = resolveEffort(opts.effort, opts.upstream);
+
+  return {
+    model,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    tools: [answerTool()],
+    tool_choice: "auto",
+    max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(effort === undefined ? {} : { reasoning_effort: effort }),
+  };
+}
+
+/**
+ * 从回包里取出 tool_calls。
+ *
+ * ★ **工具路径的「空 content + finish_reason=length」在这里拦。**
+ * 实测观察到的唯一失败形态是推理把预算吃光 —— 此时 `content` 为空、
+ * **一个 tool_call 都不发**，而 HTTP 是 200。`extractContent` 管不了这件事：
+ * 工具调用成功时 `content` 本来就可能为 null（实测回包正是如此），
+ * 所以不能拿「content 空」当判据，得看**有没有 tool_calls**。
+ *
+ * 三种「没有 tool_call」的情形要分开报，因为它们指向完全不同的处置：
+ *   1. 预算烧光（`finish_reason: "length"`）→ 值得重试，或把预算调大
+ *   2. 模型回了一段文字（通常是提示词没让它用工具）→ 重试也是白搭，要看提示词
+ *   3. 回包结构就不对（没有 choices[0]）→ 上游或网关的问题
+ * **归成一个「模型没答」就等于把三种故障混成一栏统计** —— 那是踩过的坑。
+ */
+export function extractToolCalls(
+  choice:
+    | {
+        readonly message?: { readonly content?: string | null; readonly tool_calls?: unknown };
+        readonly finish_reason?: string;
+      }
+    | undefined,
+): LlmToolCall[] {
+  if (!choice) throw new BrokerError("回包里没有 choices[0]", true);
+
+  const fr = choice.finish_reason ?? "未知";
+  const raw = choice.message?.tool_calls;
+
+  if (Array.isArray(raw) && raw.length > 0) {
+    const out: LlmToolCall[] = [];
+    for (const t of raw) {
+      const c = t as { id?: unknown; function?: { name?: unknown; arguments?: unknown } };
+      // 没有 id 就没法回述 tool 消息（`tool_call_id` 是必填的），整条丢掉
+      if (typeof c?.id !== "string") continue;
+      out.push({
+        id: c.id,
+        name: typeof c.function?.name === "string" ? c.function.name : ANSWER_TOOL_NAME,
+        argumentsJson: typeof c.function?.arguments === "string" ? c.function.arguments : "{}",
+      });
+    }
+    if (out.length === 0) {
+      throw new BrokerError(`回包里有 ${raw.length} 条 tool_calls，但没有一条带 id`, true, fr);
+    }
+    return out;
+  }
+
+  const content = choice.message?.content ?? "";
+  if (content.trim() === "") {
+    throw new BrokerError(
+      fr === "length"
+        ? "上游把输出预算全部用在了推理上，一个 tool_call 都没发（finish_reason=length）"
+        : `上游既没有调用工具，content 也是空的（finish_reason=${fr}）`,
+      true,
+      fr,
+    );
+  }
+  throw new BrokerError(
+    `上游回了文字而不是工具调用（finish_reason=${fr}）：${content.slice(0, 120)}`,
+    true,
+    fr,
+  );
+}
+
+/**
+ * 一次工具调用的参数 → Jev 形状的答案。
+ *
+ * 容错口径与 `fromLlmContent` **刻意一致**：键必须在问过的那些里、值必须是有限数、
+ * 越界夹住不丢弃。坏 JSON / 缺 `answers` **返回空映射而不抛** ——
+ * 与实测脚本 `catch { /* 坏参数忽略 *\/ }` 的处理一致：
+ * 一条坏参数不该炸掉整轮，它只是这一轮没答出东西，由**调用方**判断这算不算失败
+ * （「一轮一个有效答案都没有」才是失败，见循环那一层）。
+ *
+ * 纯函数：不改动入参。
+ */
+export function answersFromToolArguments(
+  argumentsJson: string,
+  questions: Questions,
+): Record<string, Answer> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argumentsJson);
+  } catch {
+    return {};
+  }
+
+  const raw = (parsed as { answers?: unknown } | null)?.answers;
+  if (!Array.isArray(raw)) return {};
+
+  const type = upstreamTypeFor(questions);
+  const out: Record<string, Answer> = {};
+  for (const item of raw) {
+    const key = (item as { key?: unknown })?.key;
+    const value = (item as { value?: unknown })?.value;
+    if (typeof key !== "string" || !(key in questions)) continue;
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    out[key] = { type: type as Answer["type"], noul: clamp01(value) } as Answer;
+  }
+  return out;
+}
+
+/**
+ * 告诉模型**还剩多少**的那条回包。
+ *
+ * ⚠ **实测里它从未被用到**（8/8 都是一轮答完，循环第二轮都没进）。
+ * 保留它是因为成本极低，而一旦碰上「N 远大于单次输出上限」的场面，
+ * 没有它模型就无从知道还剩什么 —— 但**不要声称它被验证过**。
+ */
+export function toolResultMessage(
+  toolCallId: string,
+  accepted: readonly string[],
+  remaining: number,
+  remainingKeys: readonly string[],
+): LlmMessage {
+  return {
+    role: "tool",
+    tool_call_id: toolCallId,
+    content: JSON.stringify({ accepted, remaining, remaining_keys: remainingKeys }),
+  };
+}
+
+/**
+ * 复述 assistant 那一次 `tool_calls`。
+ *
+ * **不回述的话上游会拒收随后的 tool 消息** —— OpenAI 兼容协议要求每条 tool
+ * 消息前面必须有对应的 assistant tool_calls。`content` 原样带过去
+ * （实测成功时它是 `null`，这可能就是模型此刻的全部交代）。
+ */
+export function assistantToolCallsMessage(
+  content: string | null,
+  calls: readonly LlmToolCall[],
+): LlmMessage {
+  return {
+    role: "assistant",
+    content: content ?? null,
+    // 回述时 `type: "function"` 是必填的 —— 少了它上游会拒收整个会话
+    tool_calls: calls.map((c) => ({
+      id: c.id,
+      type: "function" as const,
+      function: { name: c.name, arguments: c.argumentsJson },
+    })),
+  };
 }
 
 export function usageOf(payload: unknown): LlmUsage {

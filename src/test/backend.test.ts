@@ -551,3 +551,69 @@ test("★ 适配器：请求上的 llm 优先于构造时的 llm（同一后端�
   await backend.evaluate({ model: DIRECT.model, state: {}, questions: QUESTIONS, llm: { effort: "max" } });
   assert.deepEqual((calls[0].body as { llm: unknown }).llm, { effort: "max" });
 });
+
+/* ══════════════════════════════════════════════════════════════════
+   三·补：代理如实报的 upstreamCalls 与 reasoningTokens
+   ══════════════════════════════════════════════════════════════════
+
+   本节是「工具循环」那条线在客户端这一侧的落点。
+
+   工具循环的一次决策会向上游发 **N 次**请求，而客户端在应用层只看得见
+   「我发了一次 HTTP」。代理把真实次数放在回包的 `upstreamCalls` 里 ——
+   这一栏不认，「工具循环比 JSON 贵多少」就永远算不出来，而那正是这个
+   项目要实现工具循环的理由之一。 */
+
+test("★ 代理报了几次就记几次：工具循环的一次「尝试」报了 3，upstreamCalls 就是 3", async () => {
+  const { fetch } = scripted(json({ answers: ANSWERS, upstreamCalls: 3, usage: { inputTokens: 300 } }));
+  const r = await callJev(DIRECT, {}, QUESTIONS, { retry: FAST, fetchImpl: fetch });
+
+  assert.equal(r.upstreamCalls, 3, "把工具循环的 3 次上游调用记成了 1 —— 成本被藏起来了");
+});
+
+test("★ 重试与循环叠加：失败的那次按 1 记，成功的那次按它自报的 2 记 → 共 3", async () => {
+  const { fetch, calls } = scripted(
+    json({ error: { message: "rate limit" } }, 429),
+    json({ answers: ANSWERS, upstreamCalls: 2, usage: { inputTokens: 20 } }),
+  );
+  const r = await callJev(DIRECT, {}, QUESTIONS, { retry: FAST, fetchImpl: fetch });
+
+  // 第一次尝试失败了，数不到它内部的次数 → 按 1 记（保守）。
+  // 宁可少算也不虚报，而少算的那部分由「重试了几次」这条独立的统计兜着
+  assert.equal(r.upstreamCalls, 3, `期望 1（失败的尝试）+ 2（成功那次），实际 ${r.upstreamCalls}`);
+  assert.equal(calls.length, 2);
+});
+
+test("代理没报 upstreamCalls 时按 1 算 —— 老代理 / 直连厂商的回包不该变成 0", async () => {
+  const { fetch } = scripted(ok(ANSWERS, { inputTokens: 10 }));
+  const r = await callJev(DIRECT, {}, QUESTIONS, { retry: FAST, fetchImpl: fetch });
+  assert.equal(r.upstreamCalls, 1);
+});
+
+test("★ 代理以驼峰报的 reasoningTokens 要读出来（下划线那套是直连厂商的形态）", async () => {
+  const { fetch } = scripted(
+    json({
+      answers: ANSWERS,
+      usage: { inputTokens: 100, outputTokens: 4000, reasoningTokens: 4000 },
+    }),
+  );
+  const r = await callJev(DIRECT, {}, QUESTIONS, { retry: FAST, fetchImpl: fetch });
+
+  assert.equal(r.usage?.reasoningTokens, 4000, "推理 token 丢了 —— 「关思维链省了多少钱」就算不出来");
+  assert.equal(r.usage?.outputTokens, 4000);
+});
+
+test("两种拼写同时出现时以驼峰为准（代理是转发链上更近的那一环）", async () => {
+  const { fetch } = scripted(
+    json({
+      answers: ANSWERS,
+      usage: {
+        inputTokens: 1,
+        outputTokens: 2,
+        reasoningTokens: 7,
+        completion_tokens_details: { reasoning_tokens: 999 },
+      },
+    }),
+  );
+  const r = await callJev(DIRECT, {}, QUESTIONS, { retry: FAST, fetchImpl: fetch });
+  assert.equal(r.usage?.reasoningTokens, 7);
+});

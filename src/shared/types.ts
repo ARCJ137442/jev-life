@@ -202,7 +202,22 @@ export interface JevResponse {
      * 见 `shared/backend.ts` 的 `TokenUsage.reasoningTokens`。
      */
     readonly completion_tokens_details?: { readonly reasoning_tokens?: number };
+    /**
+     * 本项目的代理回给浏览器时的驼峰写法（`src/server/server.ts` 与
+     * `api/_upstream.ts` 都发这一栏）。与上面那个下划线形态是**同一个语义的
+     * 两种拼写** —— 上游厂商之间不一致，所以两道都留着。
+     */
+    readonly reasoningTokens?: number;
   };
+  /**
+   * 这次决策**真的发了几次上游请求**。
+   *
+   * ★ 只有本项目的代理会报（`callJev` 省略时按 1 算）。它存在的理由是
+   * **工具循环**：一次决策可能发 N 次上游请求，而客户端在应用层只看得见
+   * 「我发了一次 HTTP」。不报的话，`upstreamCalls` 会把 N 次记成 1 ——
+   * 而那个数字正是「工具循环比 JSON 贵多少」的唯一来源。
+   */
+  readonly upstreamCalls?: number;
   readonly providerMetadata?: Record<string, unknown>;
 }
 

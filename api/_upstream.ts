@@ -36,13 +36,21 @@
  * **将来给 broker 加运行期依赖时，这条会断，要重新想办法。**
  */
 import {
+  BrokerError,
+  answersFromToolArguments,
+  assistantToolCallsMessage,
+  buildToolRequest,
   extractContent,
+  extractToolCalls,
   fromLlmContent,
   toLlmRequest,
+  toolResultMessage,
   usageOf,
+  type LlmMessage,
   type LlmReasoningEffort,
+  type LlmUsage,
 } from "../src/shared/llm-broker.ts";
-import type { Questions } from "../src/shared/types.js";
+import type { Answer, Questions } from "../src/shared/types.js";
 
 /** Vercel 注入的最小请求/响应形状（只声明用到的部分，避免依赖 @vercel/node） */
 export interface Req {
@@ -228,6 +236,143 @@ function normalizeQuestionTypes<T>(body: T, upstream: string): T {
 }
 
 /**
+ * 上游用非 200 回话。
+ *
+ * ★ **它必须与 `BrokerError` 分开。** 硬性要求第 1 条：`429` 与「模型没答」
+ * 在代码里长得一模一样 —— 一个「请求根本没被受理」在统计上会表现成
+ * 「模型不行」。分成两个类型，调用方才有可能把状态码原样回给浏览器。
+ *
+ * ⚠ 与 broker 同一条约束：**不能用构造函数参数属性**（本文件也在 Node 的
+ * strip-only 模式下被 `src/test/normalize.test.ts` 直接 import）。
+ */
+class UpstreamStatusError extends Error {
+  readonly status: number;
+  readonly body: string;
+
+  constructor(status: number, body: string) {
+    super(`上游返回 ${status}`);
+    this.name = "UpstreamStatusError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
+ * 工具循环（`callPolicy = "tool"`）。
+ *
+ * ★ **循环在这里而不在 broker 里** —— broker 是纯函数，不碰网络。它只提供
+ * 三块积木（拼请求 / 解析 tool_call / 拼回包），`for` 落在这一层。
+ *
+ * ⚠ 与 `src/server/server.ts` 里那份是**同源的重复**（`api/` 刻意不引 `src/`，
+ * 理由见 UPSTREAM_TIMEOUT_MS 那段）。**改一处记得改另一处。**
+ *
+ * 实测依据（`docs/llm-backends.md` 第三节）：模型**总是选择一轮全答** ——
+ * N=1/6/12/24 各 2 次，8/8 全成功、上游调用次数恒为 1。所以这里
+ * **不主动限制每轮批量**，只做三件实测要求的事：
+ *
+ *   1. 每轮**先看状态码**再看回包（429 不能被算成「模型没答」）
+ *   2. 空 `content` + `finish_reason: "length"` 当失败 —— 模型可能把预算
+ *      全烧在推理上，一个 tool_call 都不发（`extractToolCalls` 里拦）
+ *   3. `upstreamCalls` 与 token **如实累加** —— 循环是 N 次，
+ *      那正是与 Jev 对比的头条数字
+ */
+async function runToolLoop(
+  up: Upstream,
+  key: string,
+  state: unknown,
+  questions: Questions,
+  llmOpts: { readonly effort?: LlmReasoningEffort | null } | undefined,
+): Promise<{ answers: Record<string, Answer>; calls: number; usage: LlmUsage }> {
+  const req = buildToolRequest(up.model, state, questions, {
+    upstream: up.upstream,
+    ...(llmOpts && "effort" in llmOpts ? { effort: llmOpts.effort ?? null } : {}),
+  });
+
+  const messages: LlmMessage[] = [...req.messages];
+  const pending = new Set(Object.keys(questions));
+  const answers: Record<string, Answer> = {};
+  let calls = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let reasoningTokens = 0;
+
+  // 轮次上限。实测从没进过第二轮，所以它是一个**防死循环的保险**而不是策略：
+  // 模型给回一堆坏参数时，「一条都没收下」会让循环原地打转。
+  // 下面还有一条更直接的零进展检测，两者都要有 —— 上限挡的是「每轮收一条但收不完」
+  const maxRounds = Math.max(1, pending.size) + 4;
+
+  for (let round = 0; round < maxRounds && pending.size > 0; round++) {
+    const upstream = await fetch(up.url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,   // ← 密钥只在这一行出现，永不外泄
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ...req, messages }),
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
+    calls++;
+
+    const text = await upstream.text();
+
+    // ★ 先看状态码，再看回包 —— 硬性要求第 1 条
+    if (upstream.status !== 200) throw new UpstreamStatusError(upstream.status, text);
+
+    let payload: { choices?: unknown[] };
+    try {
+      payload = JSON.parse(text) as { choices?: unknown[] };
+    } catch {
+      throw new BrokerError(`上游回包不是合法 JSON：${text.slice(0, 120)}`, true);
+    }
+
+    const u = usageOf(payload);
+    inputTokens += u.inputTokens;
+    outputTokens += u.outputTokens;
+    reasoningTokens += u.reasoningTokens;
+
+    const choice = payload.choices?.[0] as Parameters<typeof extractToolCalls>[0];
+    // 空 content + finish_reason=length 在这里当失败（见 extractToolCalls）
+    const toolCalls = extractToolCalls(choice);
+
+    const before = pending.size;
+    const toolMessages: LlmMessage[] = [];
+    for (const tc of toolCalls) {
+      const accepted: string[] = [];
+      for (const [k, v] of Object.entries(answersFromToolArguments(tc.argumentsJson, questions))) {
+        // 已经答过的键不再收 —— 模型重复答同一题时，第一次的那个才是它的判断
+        if (!pending.has(k)) continue;
+        pending.delete(k);
+        answers[k] = v;
+        accepted.push(k);
+      }
+      // 每条 tool_call 各自收自己的 accepted（实测脚本给每条都发同一份，
+      // 那是简化；通常一轮只有一条，两种情况等价）
+      toolMessages.push(toolResultMessage(tc.id, accepted, pending.size, [...pending]));
+    }
+
+    if (pending.size === 0) break;
+
+    // 零进展：这一轮一条有效答案都没收下。再问下去只会把同样的坏参数再拿一次
+    if (pending.size === before) {
+      throw new BrokerError(
+        `这一轮 ${toolCalls.length} 条 tool_call 没有给出任何有效答案，还剩 ${pending.size} 题`,
+        true,
+      );
+    }
+
+    // 复述 assistant 的 tool_calls —— 少了它上游会拒收随后的 tool 消息
+    messages.push(assistantToolCallsMessage(choice?.message?.content ?? null, toolCalls));
+    messages.push(...toolMessages);
+  }
+
+  if (pending.size > 0) {
+    throw new BrokerError(`工具循环达到轮次上限（${maxRounds}），仍有 ${pending.size} 题没答`, true);
+  }
+
+  return { answers, calls, usage: { inputTokens, outputTokens, reasoningTokens } };
+}
+
+/**
  * 生成一个处理函数。两个 evaluate*.ts 各自导出一个实例。
  */
 export function makeHandler(up: Upstream) {
@@ -296,12 +441,76 @@ export function makeHandler(up: Upstream) {
         res.status(400).json({ error: { message: "这条上游需要 questions 字段" } });
         return;
       }
-      // ★ 思考强度由客户端给出（界面上那四个控件），但**收敛发生在这里** ——
+      // ★ 两个调用控件由客户端给出（界面上那四个控件），但**收敛发生在这里** ——
       // 谁能收哪些值取决于本代理背后的真实上游，那是服务端的知识。
       // 客户端送语义（并集里的某一档，或 null = 「别发这个字段」），
       // 由 broker 的 clampEffort 按能力表决定发什么、还是不发。
       // 与 `src/server/server.ts` 是同源的重复，**改一处记得改另一处**
-      const llmOpts = (body as { llm?: { effort?: LlmReasoningEffort | null } }).llm;
+      const llmOpts = (
+        body as {
+          llm?: { effort?: LlmReasoningEffort | null; callPolicy?: "json" | "tool" };
+        }
+      ).llm;
+
+      // ★ 调用策略决定走哪条路。**认不出的值一律回落到 JSON** ——
+      // 这是与「界面加了新档位但服务端还没更新」共存时的安全默认，
+      // 反过来（回落到 tool）会让没升级的服务端去发它不认识的 tools 字段
+      if (llmOpts?.callPolicy === "tool") {
+        try {
+          const r = await runToolLoop(up, key, (body as { state?: unknown }).state, questions, llmOpts);
+          console.log(
+            `[${up.label}] 200 → ${Object.keys(r.answers).length} 题 ` +
+              `（工具循环 ${r.calls} 次上游调用） ` +
+              `${r.usage.inputTokens}in/${r.usage.outputTokens}out（推理 ${r.usage.reasoningTokens}）`,
+          );
+          res.status(200);
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.send(
+            JSON.stringify({
+              answers: r.answers,
+              usage: {
+                inputTokens: r.usage.inputTokens,
+                outputTokens: r.usage.outputTokens,
+                // 推理 token 单独记 —— 它可占输出的 100%
+                reasoningTokens: r.usage.reasoningTokens,
+              },
+              // ★ 如实回上游调用次数。工具循环是 N 次，而那正是与 Jev 对比的头条数字；
+              // 不报的话客户端只能按「一次请求」记成 1，两轮与一轮就分不出来了
+              upstreamCalls: r.calls,
+            }),
+          );
+        } catch (e) {
+          // ★ 429 / 5xx 原样透传，不并入「模型没答」—— 硬性要求第 1 条。
+          // 归错档，「请求根本没被受理」在统计上会表现成「模型不行」
+          if (e instanceof UpstreamStatusError) {
+            console.log(`[${up.label}] ${e.status}（工具循环中）`);
+            console.error(`[${up.label}] ${e.status} 上游原文：${e.body.slice(0, 500)}`);
+            res.status(e.status).json({ error: { message: publicError(e.status) } });
+            return;
+          }
+          // 超时与「上游回了个错误」分开 —— 前者值得重试，后者要看状态码
+          if (e instanceof Error && e.name === "TimeoutError") {
+            console.error(`[${up.label}] 上游超过 ${UPSTREAM_TIMEOUT_MS}ms 没有响应（工具循环）`);
+            res.status(504).json({ error: { message: "上游响应超时，请稍后重试。" } });
+            return;
+          }
+          // ★ 「模型没答」与「请求根本没发出去」必须分开报 —— 与硬性要求第 1 条
+          // 同源的道理。实测踩到过：网络抖了一下，用户看到的是
+          // 「上游没有给出可用的答案」，于是去调提示词 —— 而真正的原因是连不上
+          if (e instanceof BrokerError) {
+            console.error(`[${up.label}] 502 broker 翻译失败：${e.message}`);
+            res.status(502).json({ error: { message: `上游没有给出可用的答案：${e.message}` } });
+            return;
+          }
+          const err = e as Error & { cause?: { code?: string; message?: string } };
+          const detail = err.cause?.code ?? err.cause?.message ?? "";
+          const msg = detail ? `${err.message}（${detail}）` : err.message;
+          console.error(`[${up.label}] 502 连接失败：${msg}`);
+          res.status(502).json({ error: { message: `无法连接上游：${msg}` } });
+        }
+        return;
+      }
+
       outgoing = toLlmRequest(up.model, (body as { state?: unknown }).state, questions, {
         upstream: up.upstream,
         // 字段缺席 = 客户端没意见 → toLlmRequest 的默认姿态（none）；
@@ -355,7 +564,15 @@ export function makeHandler(up: Upstream) {
           res.send(
             JSON.stringify({
               answers,
-              usage: { inputTokens: u.inputTokens, outputTokens: u.outputTokens },
+              usage: {
+                inputTokens: u.inputTokens,
+                outputTokens: u.outputTokens,
+                // 推理 token 单独记 —— 它可占输出的 100%，混进 outputTokens
+                // 就没法回答「关思维链省了多少钱」
+                reasoningTokens: u.reasoningTokens,
+              },
+              // JSON 路径恒为 1。两条路径都报同一个字段，客户端的记账才只有一处
+              upstreamCalls: 1,
             }),
           );
         } catch (e) {
