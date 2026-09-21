@@ -1747,7 +1747,16 @@ function commitApiSettings(): void {
     Math.min(10_000, Number($<HTMLInputElement>("inpRetryBase").value) || store.api.retryBaseMs),
   );
 
-  state.keys[state.role] = b.needsKey ? inpKey.value.trim() : "";
+  // ★ 空输入框 = 「不改」，不是「清掉」。
+  //
+  // 密钥**从不回显**（每次打开抽屉都是空的），所以「空」承载不了「用户想要一个空
+  // 密钥」这个意思 —— 把空读成清除，会让「点开抽屉、什么都没输、点保存」变成
+  // 一次静默的密钥清除，而失败要等到下一次调用才以一个 401 现身，症状与原因
+  // 隔得很远。刷新页面本来就会清空密钥，所以这里不需要再给一条清除路径。
+  const typed = inpKey.value.trim();
+  if (!b.needsKey) state.keys[state.role] = "";
+  else if (typed !== "") state.keys[state.role] = typed;
+
   save(store);
   updateBackendLabel();
   syncApiUi();
@@ -2206,7 +2215,7 @@ function boot(): void {
     "roleHint", "ruleNote", "hintText", "inpPredict", "inpDetect",
     "inpMemory", "memoryVal", "bMemMax", "inpStrategy", "thresholdRow",
     "inpThreshold", "thresholdVal", "inpChannel", "bStrategySync", "bStrategyReset", "bStrategyDone",
-    "selBackend", "inpKey", "inpBase", "inpModel", "advancedApi", "modelHint", "backendNote",
+    "selBackend", "inpKey", "keyHint", "inpBase", "inpModel", "advancedApi", "modelHint", "backendNote",
     "inpRetryMax", "inpRetryBase", "retryPreview", "bApiSync", "bApiReset", "bApiSave", "bApiClose",
     "logList", "logCount", "bCopyAll", "bLogClear", "bLogDone",
     "bExpGame", "bImpGame", "bExpStrategy", "bImpStrategy", "bExpApi", "bImpApi",

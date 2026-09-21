@@ -196,6 +196,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "api.keySafety": "密钥安全",
     "api.keyNote":
       "只有选「直连」类后端时才需要填写。密钥仅存于当前页面的内存，刷新即清除，不会写入本地存储，也不会随存档导出。",
+    "api.keyHint":
+      "留空 = 沿用已填的密钥（输入框每次打开都是空的 —— 密钥不回显，这是刻意的）。刷新页面即清空。",
     "api.backend": "后端",
     "api.customOnly": "只有自建 / 直连后端需要改这里",
     "api.retry": "自动重试",
@@ -586,6 +588,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     "api.keySafety": "Key safety",
     "api.keyNote":
       "Only needed for direct backends. The key lives in this page's memory only, is cleared on reload, is never written to local storage and never exported with an archive.",
+    "api.keyHint":
+      "Leave empty to keep the key already entered (the field is always empty when reopened — the key is never echoed back, by design). Reloading the page clears it.",
     "api.backend": "Backend",
     "api.customOnly": "Only custom / direct backends need this",
     "api.retry": "Automatic retries",

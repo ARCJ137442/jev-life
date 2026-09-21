@@ -773,7 +773,11 @@ textarea{resize:vertical}
     </div>
 
     <div class="field"><label data-i18n="api.backend">后端</label><select id="selBackend"></select></div>
-    <div class="field"><label>API Key</label><input type="password" id="inpKey" autocomplete="off"></div>
+    <div class="field">
+      <label>API Key</label>
+      <input type="password" id="inpKey" autocomplete="off">
+      <div class="tinylbl" id="keyHint" data-i18n="api.keyHint">留空 = 沿用已填的密钥。</div>
+    </div>
     <div class="field">
       <label>Model ID</label>
       <input type="text" id="inpModel">
