@@ -662,7 +662,7 @@ import { referenceStep } from "../core/life.js";
    实现写错时它们会以不同方式失败，覆盖不同的错误模式。 */
 
 test("方块（Block）是静物，任何拓扑下都不变", () => {
-  const block = [[".##.", ".##.", "....", "...."]];  // 4×4
+  // 4×4 棋盘，方块放左上：任何拓扑下都必须逐代不变
   const b = boardFromRows([".##.", ".##.", "....", "...."]);
   for (const topo of ["bounded", "torus"] as const) {
     assert.deepEqual(toRows(referenceStep(b, topo)), toRows(b), `topo=${topo}`);
@@ -714,14 +714,18 @@ test("死棋盘保持死亡", () => {
 /* ═══ 拓扑的边界行为 ═══
    这是 bounded 与 torus 唯一必须分道扬镳的地方。 */
 
-test("bounded：角落格子的界外邻居算死", () => {
-  // 三个活细胞排满第一行 —— bounded 下这是 Blinker 的退化形态，
-  // 因为界外不算邻居；torus 下则完全不同。
+test("bounded：贴边的信号灯退化成两格，再一代全灭", () => {
+  // 无限棋盘上的信号灯是周期 2 的振荡器；但贴在边界上时，
+  // 两端格子各只剩一个界内邻居，于是只活下中间那个。
   const b = boardFromRows(["###.", "....", "....", "...."]);
-  const n = referenceStep(b, "bounded");
-  assert.deepEqual(toRows(n), [".....", ...].slice(0, 0) as never ?? toRows(n));
-  // 具体断言见下一条测试，这里只确认不抛异常
-  assert.equal(n.cols, 4);
+  const gen1 = referenceStep(b, "bounded");
+  assert.deepEqual(toRows(gen1), [".#..", ".#..", "....", "...."]);
+  const gen2 = referenceStep(gen1, "bounded");
+  assert.deepEqual(toRows(gen2), ["....", "....", "....", "...."], "两格结构应当整体死亡");
+
+  // 同样的输入在 torus 下不会退化 —— 行首行尾是相邻的
+  const wrapped = referenceStep(b, "torus");
+  assert.notDeepEqual(toRows(wrapped), toRows(gen1), "两种拓扑给出了相同结果，说明其中一种没处理边界");
 });
 
 test("bounded 与 torus 在同样输入下给出不同结果", () => {
@@ -1087,49 +1091,94 @@ const rules: GameRules = {
   maxAlive: 51,
 };
 
+// ⚠ 所有夹具都必须 ≥ MIN_SIZE(4)。T3 实测：计划初稿用了 2×2 棋盘，
+//    结果每个用例都先撞在 assertSize 上，测的根本不是被测函数。
+
 test("boardKey 对相同棋盘稳定，对不同棋盘不同", () => {
-  assert.equal(boardKey(boardFromRows([".#", ".."])), boardKey(boardFromRows([".#", ".."])));
-  assert.notEqual(boardKey(boardFromRows([".#", ".."])), boardKey(boardFromRows(["#.", ".."])));
+  const a = boardFromRows([".#..", "....", "....", "...."]);
+  const b = boardFromRows([".#..", "....", "....", "...."]);
+  const c = boardFromRows(["#...", "....", "....", "...."]);
+  assert.equal(boardKey(a), boardKey(b));
+  assert.notEqual(boardKey(a), boardKey(c));
 });
 
-test("boardKey 不含尺寸，尺寸不同的棋盘不会撞 key", () => {
-  // 4×4 全死 与 2×2 全死 的 cells 都是 0 填充但长度不同
-  assert.notEqual(boardKey(boardFromRows(["....", "....", "....", "...."])), boardKey(boardFromRows(["..", ".."])));
+test("boardKey 含尺寸，尺寸不同的棋盘不会撞 key", () => {
+  // 4×4 全死 与 5×5 全死：cells 都是全 0，长度不同。
+  // 若 key 只编码 cells 而不带尺寸，这两者会撞在一起。
+  const four = boardFromRows(["....", "....", "....", "...."]);
+  const five = boardFromRows([".....", ".....", ".....", ".....", "....."]);
+  assert.notEqual(boardKey(four), boardKey(five), "4×4 与 5×5 的全死棋盘撞了 key —— key 没带尺寸");
 });
 
 test("活细胞降到 minAlive 及以下时终局", () => {
   const b = boardFromRows(["....", ".#..", "....", "...."]);   // 1 个活细胞
-  assert.deepEqual(classifyTermination(b, rules, 10, new Set()), { reason: "minAlive" });
+  assert.deepEqual(classifyTermination(b, "life", rules, 10, new Set()), { reason: "minAlive" });
 });
 
 test("活细胞升到 maxAlive 及以上时终局", () => {
   const rows = Array(8).fill("########");
-  rows[7] = "#######.";                                        // 63 = 51 以上
+  rows[7] = "#######.";                                        // 63 格 > maxAlive 51
   const b = boardFromRows(rows);
-  assert.deepEqual(classifyTermination(b, rules, 10, new Set()), { reason: "maxAlive" });
+  assert.deepEqual(classifyTermination(b, "death", rules, 10, new Set()), { reason: "maxAlive" });
 });
 
 test("达到回合上限时终局", () => {
   const b = boardFromRows([".##.", ".##.", "....", "...."]);
-  assert.deepEqual(classifyTermination(b, rules, 90, new Set()), { reason: "turnLimit" });
+  assert.deepEqual(classifyTermination(b, "life", rules, 90, new Set()), { reason: "turnLimit" });
 });
 
-test("无合法动作时终局 —— 这是设计文档漏掉的一条", () => {
+/*
+ * repeatBlocked —— 设计文档漏掉的那条终局原因。
+ *
+ * 注意这条是**对判定规则本身的单元测试**，不是「构造了一个自然死局」。
+ * 我推演过：4×4 角落放一个方块并不构成死局 —— 仍有落点能改变局面
+ * （例如翻转紧邻方块的死格会让方块的角因邻居超载而死亡）。
+ * 自然死局要靠 `seen` 积累到把所有后继都覆盖才出现，很难在测试里手工构造。
+ *
+ * 所以这里直接给定一个「已包含全部后继」的 seen，验证规则按预期裁决。
+ */
+test("所有候选落点都会导致重复时，判 repeatBlocked", () => {
   const b = boardFromRows([".##.", ".##.", "....", "...."]);
-  // 构造：所有候选翻转都会导致重复
   const seen = new Set([boardKey(b)]);
   for (const cell of legalCells(b, "life")) {
-    const after = lifeStep(flip(b, cell), "bounded");
-    seen.add(boardKey(after));
+    seen.add(boardKey(lifeStep(flip(b, cell), "bounded")));
   }
-  // 全部候选都落在 seen 里 → repeatBlocked
-  assert.deepEqual(classifyTermination(b, rules, 10, seen), { reason: "repeatBlocked" });
+  assert.deepEqual(classifyTermination(b, "life", rules, 10, seen), { reason: "repeatBlocked" });
+});
+
+test("只要还有一个候选能产生新状态，就不该判 repeatBlocked", () => {
+  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  const all = legalCells(b, "life");
+  assert.ok(all.length > 1, "这个夹具需要至少两个候选才有意义");
+  // 只把「除第一个之外」的后继塞进 seen —— 第一个仍能产生新状态
+  const seen = new Set([boardKey(b)]);
+  for (const cell of all.slice(1)) {
+    seen.add(boardKey(lifeStep(flip(b, cell), "bounded")));
+  }
+  assert.equal(classifyTermination(b, "life", rules, 10, seen), null);
+});
+
+test("两个角色的合法集不同，repeatBlocked 必须按角色分别判定", () => {
+  // 同一份 seen 下，一方可能走投无路而另一方还有路
+  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  const seenForLife = new Set([boardKey(b)]);
+  for (const cell of legalCells(b, "life")) {
+    seenForLife.add(boardKey(lifeStep(flip(b, cell), "bounded")));
+  }
+  // 死之执要翻活格，它的后继和生之执不同
+  const seenForDeath = new Set([boardKey(b)]);
+  for (const cell of legalCells(b, "death")) {
+    seenForDeath.add(boardKey(lifeStep(flip(b, cell), "bounded")));
+  }
+  // 两者用各自的 seen 判定，互不干扰
+  assert.deepEqual(classifyTermination(b, "life", rules, 10, seenForLife), { reason: "repeatBlocked" });
+  assert.deepEqual(classifyTermination(b, "death", rules, 10, seenForDeath), { reason: "repeatBlocked" });
 });
 
 test("终局判定不改动入参", () => {
   const b = boardFromRows([".##.", ".##.", "....", "...."]);
   const before = Array.from(b.cells);
-  classifyTermination(b, rules, 10, new Set());
+  classifyTermination(b, "life", rules, 10, new Set());
   assert.deepEqual(Array.from(b.cells), before);
 });
 ```
