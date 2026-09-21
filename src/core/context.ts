@@ -266,6 +266,9 @@ function percent(ratio: number): string {
  * 这个差 1 只在这里出现一次，别让它散落到各处。
  */
 function horizon(turn: number, rules: GameRules): string {
+  if (rules.turnLimit === null) {
+    return `本局**不设回合上限**，当前是第 ${turn + 1} 回合 —— 一直下到分出胜负、走投无路或推不动为止。`;
+  }
   return `本局共 ${rules.turnLimit} 回合，当前是第 ${turn + 1} 回合，还剩 ${rules.turnLimit - turn} 回合。`;
 }
 
@@ -315,6 +318,13 @@ function terminationConditions(rules: GameRules, mode: Mode): string {
   // 单人：**棋盘全死不是终局**（生之执处处可翻），推不动的判定也只问生之执的
   // 落点。照搬双人那两条会凭空多出两条不存在的结束方式，而模型会据此
   // 高估「棋盘被清空」的危险，甚至以为自己已经输了
+  // 不设上限时这一条整个不出现 —— 写「上限 ∞」等于告诉模型「还有很多回合」，
+  // 那是一条凭空造出来的规则
+  const limitRule =
+    rules.turnLimit === null
+      ? "4. **本局不设回合上限** —— 一直下到分出胜负、走投无路或推不动为止。"
+      : `4. 回合数达到上限 ${rules.turnLimit}：仍未分出胜负，判和局。`;
+
   if (mode === "solo") {
     return (
       "对局在下列任一情况下立即结束：\n" +
@@ -325,7 +335,7 @@ function terminationConditions(rules: GameRules, mode: Mode): string {
       `3. 推不动了：此后无论你怎么落子，下一回合的局面都会重复已经出现过的局面 —— ` +
       `按当时的存活比例判：≥ ${percent(rules.lifeWinRatio)} 判你胜，≤ ${percent(rules.deathWinRatio)} 判你落败，` +
       `夹在两条线之间判和局。\n` +
-      `4. 回合数达到上限 ${rules.turnLimit}：仍未分出胜负，判和局。`
+      limitRule
     );
   }
   return (
@@ -337,7 +347,7 @@ function terminationConditions(rules: GameRules, mode: Mode): string {
     `3. 走投无路之二：此后无论双方怎么落子，下一回合的局面都会重复已经出现过的局面（推不动了）—— ` +
     `按当时的存活比例判：≥ ${percent(rules.lifeWinRatio)} 判生之执胜，≤ ${percent(rules.deathWinRatio)} 判死之执胜，` +
     `夹在两条线之间判和局。\n` +
-    `4. 回合数达到上限 ${rules.turnLimit}：仍未分出胜负，判和局。`
+    limitRule
   );
 }
 

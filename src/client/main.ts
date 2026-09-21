@@ -1135,7 +1135,8 @@ function reasonText(v: Termination, rules: GameRules): string {
     case "repeatBlocked":
       return t("term.repeatBlocked");
     case "turnLimit":
-      return t("term.turnLimit", { n: rules.turnLimit });
+      // 不设上限（null）时这条分支根本到不了 —— `?? "∞"` 只是给类型一个落点
+      return t("term.turnLimit", { n: rules.turnLimit ?? "∞" });
   }
 }
 
@@ -1813,7 +1814,8 @@ function syncGameUi(): void {
   $<HTMLInputElement>("inpCols").value = String(store.duel.cols);
   $<HTMLInputElement>("inpRows").value = String(store.duel.rows);
   $<HTMLSelectElement>("inpTopology").value = store.duel.topology;
-  $<HTMLInputElement>("inpTurnLimit").value = String(store.duel.turnLimit);
+  $<HTMLInputElement>("inpTurnLimit").value =
+    store.duel.turnLimit === null ? "" : String(store.duel.turnLimit);
   $<HTMLInputElement>("inpAnim").checked = store.duel.animations;
   $<HTMLInputElement>("inpParticles").checked = store.duel.particles;
 
@@ -1878,9 +1880,15 @@ function pctField(id: string, fallback: number): number {
   return clampRatio(Number($<HTMLInputElement>(id).value) / 100, fallback);
 }
 
+/**
+ * 回合上限的校验。**留空 = 不设上限，合法**（用户 2026-09-21 定）。
+ *
+ * 只挡「填了但不是 1 以上的整数」—— 那是真的填错了。空与 0 要分开：
+ * 空是「不要上限」，而 0 会得到一个「第 0 回合就判和局」的规则。
+ */
 function validateTurnLimit(): boolean {
-  const n = Number($<HTMLInputElement>("inpTurnLimit").value);
-  const bad = !Number.isInteger(n) || n < 1;
+  const raw = $<HTMLInputElement>("inpTurnLimit").value.trim();
+  const bad = raw !== "" && (!Number.isInteger(Number(raw)) || Number(raw) < 1);
   $("turnLimitWarn").style.display = bad ? "block" : "none";
   return !bad;
 }
@@ -2886,7 +2894,7 @@ function boot(): void {
       rows: store.duel.rows,
       topology: store.duel.topology,
       opening: store.duel.openingId,
-      turnLimit: store.duel.turnLimit,
+      turnLimit: store.duel.turnLimit ?? "∞",
       channel: store.roles.life.channel,
     }),
   );

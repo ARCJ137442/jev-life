@@ -67,13 +67,16 @@ export interface DuelSettings {
   mode: Mode;
   topology: Topology;
   /**
-   * 回合上限。
+   * 回合上限。**`null` = 不设上限**（留空即此，见 `GameRules.turnLimit`）。
    *
    * ★ 它**同时是「游戏」项与「模型输入」**：`core/context.ts` 的 `horizon`
    * 会把「本局共 N 回合，当前第 T 回合」写进 state。所以把 90 改成 60 之后
    * 重开一局，**概率分布必须变化** —— 那是关卡二的验收标准之一。
+   *
+   * 不设上限时 `horizon` 写的是「本局**不设回合上限**」，而不是一个巨大的数：
+   * 后者会让模型以为「还有很多回合，不急」，而那是一条凭空造出来的规则。
    */
-  turnLimit: number;
+  turnLimit: number | null;
   /**
    * 开局 id。开局库按尺寸分级，换尺寸时它会自动落到该尺寸的第一项。
    *
@@ -258,7 +261,7 @@ export function presetFor(cols: number, rows: number): SizePreset {
 }
 
 /** 某个尺寸下的默认回合上限 —— 取自预设，不是写死的常量（4×4 是 30，其余是 90） */
-function defaultTurnLimit(cols: number, rows: number): number {
+function defaultTurnLimit(cols: number, rows: number): number | null {
   return presetFor(cols, rows).rules.turnLimit;
 }
 
@@ -346,7 +349,18 @@ function clampTopology(v: unknown, fallback: Topology): Topology {
   return v === "torus" || v === "bounded" ? v : fallback;
 }
 
-export function clampTurnLimit(v: unknown, fallback: number): number {
+/**
+ * 回合上限。**空串与 null 都表示「不设上限」**（用户 2026-09-21 定）。
+ *
+ * ⚠ 这两种输入必须与 `undefined`（= 这个键根本没存过）分开：
+ *   - `""` / `null` → **不设上限**，那是用户或存档的明确选择
+ *   - `undefined` 或认不出的值 → 回落到该尺寸的预设值
+ * 合并的话，一份老存档（没有这个键）会变成「无上限对局」—— 而它本来是
+ * 90 回合的一局，症状是「这局怎么一直不结束」。
+ */
+export function clampTurnLimit(v: unknown, fallback: number | null): number | null {
+  if (v === "" || v === null) return null;
+  if (v === undefined) return fallback;
   const n = Math.round(Number(v));
   if (!Number.isFinite(n)) return fallback;
   return Math.min(999, Math.max(1, n));

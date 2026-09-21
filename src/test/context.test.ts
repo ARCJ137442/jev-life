@@ -443,3 +443,21 @@ test("★ 单人：recent_history 里**没有** death_flip 这一栏", () => {
   );
   assert.ok(has(duel.aids.recent_history?.[0] as object, "death_flip"));
 });
+
+test("★ 不设回合上限时，state 里写「不设上限」而不是一个巨大的数", () => {
+  // 写「本局共 99999 回合」会让模型以为「还有很多回合，不急」——
+  // 那是一条**凭空造出来的规则**，而不是「没有这条规则」
+  const solo = buildState(input({ mode: "solo", rules: { ...RULES, turnLimit: null } }));
+  assert.ok(solo.rules.horizon.includes("不设回合上限"), solo.rules.horizon);
+  assert.ok(
+    !/\d{3,}/.test(solo.rules.horizon.replace(/第 \d+ 回合/, "")),
+    `horizon 里还有三位数以上的数字：${solo.rules.horizon}`,
+  );
+  assert.ok(
+    solo.rules.termination_conditions.includes("不设回合上限"),
+    solo.rules.termination_conditions,
+  );
+  // 双人那边同理，而且**不能**再出现「回合数达到上限 N」那一条
+  const duel = buildState(input({ rules: { ...RULES, turnLimit: null } }));
+  assert.ok(!duel.rules.termination_conditions.includes("回合数达到上限"));
+});

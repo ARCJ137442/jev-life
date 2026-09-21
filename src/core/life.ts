@@ -598,7 +598,10 @@ export function classifyTermination(
   }
 
   // 3. 回合上限
-  if (snap.turn >= rules.turnLimit) return { reason: "turnLimit", winner: null };
+  // `null` = 不设上限（见 GameRules.turnLimit）：这一条分支整个不参与
+  if (rules.turnLimit !== null && snap.turn >= rules.turnLimit) {
+    return { reason: "turnLimit", winner: null };
+  }
 
   return null;
 }

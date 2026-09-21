@@ -502,3 +502,32 @@ test("★ 单人：repeatBlocked 的胜方不会落到「死之执」上", () =>
     winner: "life",
   });
 });
+
+test("★ 回合上限 = null 表示**不设上限**：回合数再大也不判和局", () => {
+  const b = boardFromRows([".##.", ".##.", "....", "...."]);
+  const noLimit: GameRules = { ...rules, turnLimit: null };
+
+  // 双人：与 rules.turnLimit(90) 比，第 500 回合早就该判和局了
+  assert.deepEqual(classifyTermination(snap(b, 500, []), rules, new Set<string>()), {
+    reason: "turnLimit",
+    winner: null,
+  });
+  // 不设上限时同一步什么都不发生。
+  // ⚠ 这里刻意用一个**极大**的回合数：拿 500 去测，把实现换成
+  // `rules.turnLimit ?? Number.MAX_SAFE_INTEGER` 也能通过 —— 那是一个
+  // **等价变异**，测不出「null 是真无上限」还是「只是上限很大」
+  assert.equal(
+    classifyTermination(snap(b, Number.MAX_SAFE_INTEGER, []), noLimit, new Set<string>()),
+    null,
+    "不设上限的对局不该因为回合数被掐断",
+  );
+
+  // 其余终局条件照旧生效 —— 「不设上限」不等于「不会结束」
+  const full = boardFromRows(["####", "####", "####", "##.."]); // 14/16 = 0.875
+  assert.equal(
+    classifyTermination(snap(full, 500, [0.9]), { ...noLimit, lifeStreak: 2 }, new Set<string>())
+      ?.reason,
+    "lifeWinRatio",
+    "不设回合上限之后，胜负线这一条仍然必须生效",
+  );
+});

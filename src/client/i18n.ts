@@ -149,6 +149,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.topoTorus": "环绕 — 上下边相连、左右边相连，没有墙",
     "game.rules": "终局规则",
     "game.turnLimit": "回合上限",
+    "game.turnLimitPh": "留空 = 不设上限",
     "game.turnLimitHint": "到上限仍未分出胜负判和局。它会进入发给 Jev 的 state，所以改它会立即重开一局 —— 半局中改规则会让这一局的前后两半不可比。",
     "game.rulesNote":
       "胜负线：生之执 ≥ {life}% 连续 {ls} 回合；死之执 ≤ {death}% 连续 {ds} 回合。清空 / 占满棋盘、整盘推不动都会立即终局。",
@@ -607,13 +608,14 @@ const DICT: Record<Lang, Record<string, string>> = {
     "game.topoTorus": "Torus — top wraps to bottom, left to right; no walls",
     "game.rules": "End-of-game rules",
     "game.turnLimit": "Turn limit",
-    "game.turnLimitHint": "If nobody has won by then, the game is a draw. It is written into the state sent to Jev, so changing it restarts the game immediately — changing the rules mid-game would make the two halves incomparable.",
+    "game.turnLimitPh": "empty = no limit",
+    "game.turnLimitHint": "If nobody has won by then, the game is a draw. **Leave it empty for no limit** — the game runs until someone wins, nobody can move, or the position is stuck. It is written into the state sent to Jev, so changing it restarts the game immediately — changing the rules mid-game would make the two halves incomparable.",
     "game.rulesNote":
       "Win lines: Life holds ≥ {life}% for {ls} turns; Death holds ≤ {death}% for {ds} turns. Emptying or filling the board, or a position that can no longer move, ends the game immediately.",
     "game.rulesUncalibrated": "⚠ These thresholds are placeholders and have not been calibrated by benchmark runs — they are editable so you can experiment, not because they are now trustworthy.",
     "game.rulesInverted":
       "⚠ Death's line is not below Life's: the Life condition is tested first, so an inverted pair means Death's line can never actually trigger.",
-    "game.turnLimitWarn": "The turn limit must be an integer of at least 1",
+    "game.turnLimitWarn": "The turn limit must be either empty (no limit) or an integer of at least 1",
     "game.lifeWin": "Life wins at",
     "game.deathWin": "Death wins at",
     "game.streak": "for",

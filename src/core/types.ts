@@ -74,8 +74,18 @@ export const MAX_SIZE = 16;
  * 只看一代就判胜负，等于把胜负交给运气。
  */
 export interface GameRules {
-  /** 回合上限。到上限仍未分出胜负 → 和局 */
-  readonly turnLimit: number;
+  /**
+   * 回合上限。到上限仍未分出胜负 → 和局。
+   *
+   * ★ **`null` = 不设上限**（用户 2026-09-21 定）：对局一直下到分出胜负、
+   * 走投无路或推不动为止。
+   *
+   * 做成 `number | null` 而不是拿一个巨大的数（比如 99999）冒充「无限」：
+   * 那个数会**进到发给模型的 state 里**（`horizon` 会写「本局共 99999 回合」），
+   * 而模型据此判断「还有很久，不急」—— 那是一条凭空造出来的规则，
+   * 而不是「没有这条规则」。
+   */
+  readonly turnLimit: number | null;
   /** 活细胞占比 ≥ 此值，且**连续**保持 lifeStreak 回合 → 生之执获胜 */
   readonly lifeWinRatio: number;
   /** ≤ 此值且连续保持 deathStreak 回合 → 死之执获胜 */

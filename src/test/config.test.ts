@@ -23,6 +23,7 @@ import {
   clampRatio,
   clampSize,
   clampStreak,
+  clampTurnLimit,
   isPresetSize,
   presetFor,
   presetRulesFor,
@@ -254,4 +255,18 @@ test("clampEffort 与界面的期望一致：收不了就不发，且不改语�
   assert.equal(clampEffort("xhigh", "agnes"), undefined);
   assert.equal(clampEffort("max", "agnes"), "max");
   assert.equal(clampEffort("max", "没见过的上游"), undefined);
+});
+
+test("★ 回合上限：空串与 null = 不设上限；undefined（键没存过）才回落", () => {
+  // 界面上清空输入框 = 不要上限。这与「这个键根本没存过」是两件事：
+  // 合并的话，一份老存档（没有这个键）会变成「无上限对局」，
+  // 而它本来是 90 回合的一局 —— 症状是「这局怎么一直不结束」
+  assert.equal(clampTurnLimit("", 90), null);
+  assert.equal(clampTurnLimit(null, 90), null);
+  assert.equal(clampTurnLimit(undefined, 90), 90, "键没存过才回落到预设");
+  assert.equal(clampTurnLimit("60", 90), 60);
+  assert.equal(clampTurnLimit(60, 90), 60);
+  // 0 与空串必须分开：0 会得到一个「第 0 回合就判和局」的规则
+  assert.equal(clampTurnLimit(0, 90), 1);
+  assert.equal(clampTurnLimit("abc", 90), 90);
 });
