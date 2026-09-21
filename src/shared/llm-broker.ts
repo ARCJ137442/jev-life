@@ -212,17 +212,34 @@ export function questionText(q: Question): string {
    响应侧：LLM 形状 → Jev 形状
    ══════════════════════════════════════════════════════════════════ */
 
-/** broker 自己的错误类型 —— 调用方据此决定重试还是直接报错 */
+/**
+ * broker 自己的错误类型 —— 调用方据此决定重试还是直接报错。
+ *
+ * ⚠ **这里刻意不用 TypeScript 的「构造函数参数属性」**（`constructor(readonly x: T)`），
+ * 写法比现在啰嗦但必须如此：
+ *
+ * `api/_upstream.ts` 会在 **Node 的 strip-only 模式**下 import 本文件
+ * （`src/test/normalize.test.ts` 为了配假 fetch 抓请求体而直接运行它）。
+ * 参数属性能生成运行时代码，而 strip-only **只擦类型不做代码生成** ——
+ * 用了它会在 import 的那一刻抛：
+ *
+ *     SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]:
+ *     TypeScript parameter property is not supported in strip-only mode
+ *
+ * 同一条约束对本文件里的**任何**代码都成立：**不能用 `enum`、`namespace`、
+ * 参数属性、装饰器**。加运行期代码之前先想一下这一条。
+ */
 export class BrokerError extends Error {
-  constructor(
-    message: string,
-    /** 是否值得重试。**「模型没答」值得重试，「模型答错形状」也值得**（实测是偶发的） */
-    readonly retryable: boolean = true,
-    /** 上游报的结束原因，便于统计 */
-    readonly finishReason?: string,
-  ) {
+  /** 是否值得重试。**「模型没答」值得重试，「模型答错形状」也值得**（实测是偶发的） */
+  readonly retryable: boolean;
+  /** 上游报的结束原因，便于统计 */
+  readonly finishReason: string | undefined;
+
+  constructor(message: string, retryable = true, finishReason?: string) {
     super(message);
     this.name = "BrokerError";
+    this.retryable = retryable;
+    this.finishReason = finishReason;
   }
 }
 

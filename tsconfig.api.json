@@ -5,7 +5,8 @@
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["api/**/*.ts"]
+  "include": ["api/**/*.ts", "src/shared/**/*.ts"]
 }

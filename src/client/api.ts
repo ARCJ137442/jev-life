@@ -27,18 +27,16 @@ import type {
 /* ══════════════ 静态托管支持 ══════════════ */
 
 /**
- * 远端免费试用端点的地址。
+ * 远端免费试用端点的地址 —— **不在这里定义，见 `./deploy.js`**。
  *
- * 纯静态托管（GitHub Pages、任意静态空间、file://）没有同源的服务端函数，
- * 所以「免费试用」类后端必须指向别处 —— 也就是 Vercel 上的那份部署。
+ * ⚠ 刻意**没有默认值**。写死一个默认域名等于让别人的 fork 静默消耗
+ * 原作者的额度，而靠注释提醒「请改成你的」只是君子协议 ——
+ * 本项目一向的做法是**让那条路走不通，而不是请求人守规矩**。
  *
- * **这不是把密钥搬进静态文件**：静态页面只发请求，密钥仍在 Vercel 的函数进程里。
- * 部署到自己的域名后，把这个常量改成你的地址即可。
- *
- * ⚠ 换 Vercel 域名时必须同步改这里，否则静态版跨域调不通 —— 而失败的样子
- * 是「请求超时」，看不出跟域名有关。
+ * 顺带 re-export，调用方不必知道它住在哪。
  */
-export const REMOTE_PROXY_BASE = "https://jev-life.vercel.app";
+export { REMOTE_PROXY_BASE, hasRemoteProxy } from "./deploy.js";
+import { REMOTE_PROXY_BASE, hasRemoteProxy } from "./deploy.js";
 
 /**
  * 当前是否跑在「没有同源服务端」的环境里。
@@ -59,13 +57,32 @@ export function isStaticHosting(): boolean {
  *
  *   /api/evaluate  →  同源部署下原样返回（本机服务器 / Vercel 自身）
  *                  →  静态托管下拼上远端前缀
+ *                  →  静态托管**且没配远端前缀**时返回 `null`（走不通）
  *
  * 绝对 URL（直连各类网关）原样返回。
+ *
+ * ★ 返回 `null` 而不是拼出一个注定 404 的路径：那个地址根本没人配过，
+ * 发出去的请求只会得到一个 404，而 404 与「后端挂了」在界面上长得一样。
+ * **让它在出发之前就失败**，调用方才能给出「这条后端没配置」这样准确的提示。
  */
-export function resolveBase(base: string): string {
+export function resolveBase(base: string): string | null {
   if (!base.startsWith("/")) return base;
   if (!isStaticHosting()) return base;
+  if (!hasRemoteProxy()) return null;   // ← 静态托管且未配远端地址：这条路不存在
   return REMOTE_PROXY_BASE.replace(/\/$/, "") + base;
+}
+
+/**
+ * 某个后端在当前环境下**能不能真的用**。
+ *
+ * 判据是「它的地址解析得出来吗」—— 而不是「它是否配置了密钥」，
+ * 后者只有服务端知道（未配密钥时回 503，那是另一条路径上的提示）。
+ *
+ * 界面应当用它来决定要不要把这条后端显示出来：静态托管 + 没配远端地址时，
+ * 「免费试用」那几条**根本走不通**，列出来只会让人点进去踩 404。
+ */
+export function isBackendReachable(base: string): boolean {
+  return resolveBase(base) !== null;
 }
 
 /* ══════════════ 后端目录 ══════════════ */
@@ -191,10 +208,17 @@ export interface ClientConfig extends BackendTarget {
   readonly provider: BackendId;
 }
 
-/** 把配置里的代理路径解析成真实地址。其余字段原样透传 */
-export function resolveConfig(cfg: ClientConfig): BackendTarget {
+/**
+ * 把配置里的代理路径解析成真实地址。其余字段原样透传。
+ *
+ * **走不通时返回 `null`**（静态托管 + 未配远端地址）—— 调用方必须处理，
+ * 不能悄悄退回一个连不上的地址。
+ */
+export function resolveConfig(cfg: ClientConfig): BackendTarget | null {
+  const base = resolveBase(cfg.base);
+  if (base === null) return null;
   return {
-    base: resolveBase(cfg.base),
+    base,
     model: cfg.model,
     apiKey: cfg.apiKey,
     timeoutMs: cfg.timeoutMs,
@@ -204,10 +228,20 @@ export function resolveConfig(cfg: ClientConfig): BackendTarget {
 /**
  * 由界面配置造一个可用的决策后端。
  *
- * M1 只有 `systemone` 一种。加 `llm-json` / `llm-tool` 时**只要在这里多一个
- * 分支** —— `channels.ts` / `decide.ts` / `core/` 一行都不用改，它们分不出
- * 对面是 Jev 还是一个被 broker 包装的 LLM。
+ * **地址走不通时返回 `null`**（静态托管 + 未配远端地址）—— 调用方据此提示
+ * 「这条后端在当前部署下不可用」，而不是发一个注定 404 的请求。
+ *
+ * ⚠ `createSystemoneBackend` 同时服务于**两种上游**：Jev 协议的直连后端，
+ * 以及经 `/api/evaluate3` 包装的 LLM 后端。后者对客户端而言**就是一条
+ * SystemOne 上游** —— 翻译发生在服务端（见 `src/shared/llm-broker.ts`）。
+ * 所以这里不需要为 LLM 加分文，客户端也分不出区别。这正是 `DESIGN.md`
+ * 第八节那条「中间那层必须真的兼容」要的效果。
  */
-export function createBackend(cfg: ClientConfig, opts: CallOptions = {}): DecisionBackend {
-  return createSystemoneBackend(resolveConfig(cfg), { id: cfg.provider, ...opts });
+export function createBackend(
+  cfg: ClientConfig,
+  opts: CallOptions = {},
+): DecisionBackend | null {
+  const target = resolveConfig(cfg);
+  if (target === null) return null;
+  return createSystemoneBackend(target, { id: cfg.provider, ...opts });
 }

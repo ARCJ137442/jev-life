@@ -3,8 +3,14 @@
  *
  * 职责：
  *   1. 托管静态页面（public/）
- *   2. 提供 /api/evaluate 与 /api/evaluate2 代理端点 —— 上游密钥只存在于本进程
- *      内存中，浏览器全程接触不到，DevTools 的 Network / Source 面板里也看不到。
+ *   2. 提供 /api/evaluate、/api/evaluate2、/api/evaluate3 代理端点 ——
+ *      上游密钥只存在于本进程内存中，浏览器全程接触不到，
+ *      DevTools 的 Network / Source 面板里也看不到。
+ *
+ * ★ 前两条说的是 **Jev 协议**（SystemOne），第三条说的是 **OpenAI 兼容协议**。
+ *   两者形状完全不同，所以第三条进出一趟都要经 `shared/llm-broker.ts` 翻译。
+ *   而**客户端对三条一视同仁** —— 它照常发 Jev 形状，翻译发生在这一层。
+ *   这就是四层架构里「Jev 兼容 API」那条边界。
  *
  * 只用 Node 内置模块，无第三方依赖。
  *
@@ -22,7 +28,8 @@ import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { unseal } from "./seal.js";
 import { DEFAULT_TIMEOUT_MS, startTimeout } from "../shared/backend.js";
-import { normalizeQuestionTypes } from "../shared/types.js";
+import { normalizeQuestionTypes, type Questions } from "../shared/types.js";
+import { extractContent, fromLlmContent, toLlmRequest, usageOf } from "../shared/llm-broker.js";
 
 /* ═══════════ 配置 ═══════════ */
 
@@ -70,6 +77,19 @@ interface Upstream {
    * 所以这一栏在这里显式声明，不靠 `route` 或 `label` 反推。
    */
   upstream: string;
+  /**
+   * 这条上游说的是哪种协议。
+   *
+   * - `"systemone"`（省略时的默认）：**Jev 协议**，`{state, questions} → {answers}`，
+   *   请求体原样转发，只归一化判别值
+   * - `"llm"`：**OpenAI 兼容的 chat/completions**。形状与 Jev 完全不同，
+   *   所以进出一趟都要经 `src/shared/llm-broker.ts` 翻译
+   *
+   * ★ 这一栏就是四层架构里「Jev 兼容 API」那条边界：**加了它之后，客户端
+   * 对两种上游一视同仁** —— 它照常发 Jev 形状，翻译发生在这一层，
+   * 客户端既不知道、也无从知道对面是 SystemOne 还是一个被包起来的 LLM。
+   */
+  kind?: "systemone" | "llm";
 }
 
 const UPSTREAMS: Upstream[] = [
@@ -90,6 +110,22 @@ const UPSTREAMS: Upstream[] = [
     model: "typesafe/jev-1.13",
     label: "free-trial-2",
     upstream: "openrouter",
+  },
+  {
+    // 「LLM 免费试用 1」——与上面两条**协议不同**，不是同一套转发逻辑的实例。
+    // 上面两条说的是 Jev 协议（SystemOne），这条说的是 OpenAI 兼容协议，
+    // 所以进出都要过 `llm-broker` 翻译。
+    //
+    // ⚠ 它背后的提供商**不对外暴露**（与上面两条同一条纪律）：
+    // 界面只显示「LLM 免费试用 1」，健康检查只回后端标识，错误文案不含厂商名。
+    route: "/api/evaluate3",
+    url: "https://apihub.agnes-ai.com/v1/chat/completions",
+    envKey: "AGNES_API_KEY",
+    keyFile: "agens-flash-secret-api-key",
+    model: "agnes-2.5-flash",
+    label: "llm-free-trial",
+    upstream: "agnes",
+    kind: "llm",
   },
 ];
 
@@ -312,15 +348,33 @@ async function handleEvaluate(
   }
 
   // 关键：模型与密钥一律由服务器决定，忽略浏览器传来的任何认证信息。
-  // 模型 ID 的命名空间两家不同（typesafe-ai/jev vs typesafe/jev-1.13），
+  // 模型 ID 的命名空间几家不同（typesafe-ai/jev / typesafe/jev-1.13 / agnes-2.5-flash），
   // 所以取上游表里的值而不是客户端的。
-  payload.model = up.model;
+  const isLlm = up.kind === "llm";
 
-  // 判别值同理，而且更隐蔽：客户端按界面上的后端 id 取（免费试用 1 → noul），
-  // 而这条代理真正的上游是 Vercel（要 boolean）。翻译在这里做 —— 客户端不该
-  // 知道、也无从知道代理转发到哪。漏掉这一行，症状是默认的免费后端一发就 400，
-  // 而错误原文被下游刻意挡掉，浏览器侧只剩一句「后端暂时不可用」。
-  payload = normalizeQuestionTypes(payload, up.upstream);
+  // 这条上游的问题集，LLM 分支翻译响应时还要用
+  const questions = (payload as { questions?: Questions }).questions;
+
+  let outgoing: unknown;
+  if (isLlm) {
+    // ★ Jev 形状 → LLM 形状。**就在这里，客户端的请求被「翻译」成另一种协议** ——
+    // 它发的是「有哪些题、每题问什么」，broker 把它拼成一段提示词。
+    if (!questions || typeof questions !== "object") {
+      sendJson(res, 400, { error: { message: "这条上游需要 questions 字段" } });
+      return;
+    }
+    outgoing = toLlmRequest(up.model, (payload as { state?: unknown }).state, questions, {
+      upstream: up.upstream,
+    });
+  } else {
+    payload.model = up.model;
+
+    // 判别值：客户端按界面上的后端 id 取（免费试用 1 → noul），而这条代理真正的
+    // 上游是 Vercel（要 boolean）。翻译在这里做 —— 客户端不该知道、也无从知道
+    // 代理转发到哪。漏掉这一行，症状是默认的免费后端一发就 400，
+    // 而错误原文被下游刻意挡掉，浏览器侧只剩一句「后端暂时不可用」。
+    outgoing = normalizeQuestionTypes(payload, up.upstream);
+  }
 
   const t0 = Date.now();
   let status = 502;
@@ -337,7 +391,7 @@ async function handleEvaluate(
         Authorization: `Bearer ${cred.key}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(outgoing),
       signal: gate.signal,
     });
     status = upstream.status;
@@ -363,7 +417,36 @@ async function handleEvaluate(
 
   const ms = Date.now() - t0;
 
-  if (status === 200) {
+  // ★ LLM 分支：把上游的回包翻译回 **Jev 形状**，让客户端完全看不出区别。
+  //
+  // 这一步可能失败，而失败**值得重试** —— 实测观察到的唯一失败形态是
+  // 「推理吃光 max_tokens → content 为空 + finish_reason=length」，
+  // HTTP 200 看着像成功、实际什么都没答。不在这里拦住，它会以「答案数 0」
+  // 流进统计，表现成「模型不行」。映射成 502，客户端的 isRetryableStatus 认它。
+  if (isLlm && status === 200) {
+    try {
+      const d = JSON.parse(body) as { choices?: unknown[] };
+      const choice = d.choices?.[0] as Parameters<typeof extractContent>[0];
+      const content = extractContent(choice);
+      const answers = fromLlmContent(content, questions as Questions);
+      const u = usageOf(d);
+      body = JSON.stringify({
+        answers,
+        usage: { inputTokens: u.inputTokens, outputTokens: u.outputTokens },
+      });
+      // 推理 token 单独记 —— 它可占输出的 100%，混进 outputTokens 就没法回答
+      // 「关思维链省了多少钱」这个问题
+      log(
+        `✓ [${up.label}] 200  ${Object.keys(answers).length} 题  ` +
+          `${u.inputTokens}in/${u.outputTokens}out（推理 ${u.reasoningTokens}）  ${ms}ms`,
+      );
+    } catch (e) {
+      const msg = (e as Error).message;
+      log(`✗ [${up.label}] 502  broker 翻译失败：${msg}  ${ms}ms`);
+      sendJson(res, 502, { error: { message: `上游没有给出可用的答案：${msg}` } });
+      return;
+    }
+  } else if (status === 200) {
     try {
       const d = JSON.parse(body) as {
         usage?: { inputTokens?: number; input_tokens?: number };

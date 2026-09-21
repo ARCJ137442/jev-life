@@ -13,6 +13,31 @@
  *   从不进入任何响应体或客户端代码。**不下发，就不存在泄漏面。**
  */
 
+/**
+ * ⚠ 这里的 import 跨出了 `api/`。
+ *
+ * 先前 `api/` 刻意保持自包含（只 import 同目录兄弟），理由是「跨目录 import
+ * 能不能被 Vercel 打包，本地验证不了」。**broker 是个例外，而且理由充分**：
+ * 它是 200 行核心翻译逻辑、27 条测试在 `src/test/llm-broker.test.ts` 里。
+ * 在 `api/` 里复制一份 = 一份**没有测试覆盖**的副本，而那正是本项目反复
+ * 警告的「两处迟早走样」。
+ *
+ * Vercel 的 Node 构建基于 `@vercel/nft` 做依赖追踪，**会**跟着相对 import
+ * 打包项目内的文件。部署工作流的冒烟测试会实测 `/api/evaluate3`，
+ * 万一打包失败会在那里暴露。
+ *
+ * ⚠ **后缀是 `.ts` 而不是 `.js`，这不是笔误。** `src/test/normalize.test.ts`
+ * 用 Node 的 type-stripping **直接运行**本文件（为了配假 fetch 抓真正发出去的
+ * 请求体），而 **Node 不做 `.js` → `.ts` 的重写** —— 写 `.js` 会当场
+ * `ERR_MODULE_NOT_FOUND`（与 `tools/` 那堵墙是同一堵，见 `tools/_load.ts`）。
+ *
+ * 能这么写的**前提**是 `llm-broker.ts` 只 import 类型（`import type`，运行期被擦除）
+ * —— 它自己不 import 任何运行时代码，所以不会把 `.js` 后缀的问题带进来。
+ * **将来给 broker 加运行期依赖时，这条会断，要重新想办法。**
+ */
+import { extractContent, fromLlmContent, toLlmRequest, usageOf } from "../src/shared/llm-broker.ts";
+import type { Questions } from "../src/shared/types.js";
+
 /** Vercel 注入的最小请求/响应形状（只声明用到的部分，避免依赖 @vercel/node） */
 export interface Req {
   method?: string;
@@ -47,6 +72,14 @@ export interface Upstream {
    * 按客户端 id 算就是那次「默认免费后端一发就 400」的根因。
    */
   upstream: string;
+  /**
+   * 这条上游说的是哪种协议。
+   *
+   * - `"systemone"`（省略时的默认）：**Jev 协议**，`{state, questions} → {answers}`
+   * - `"llm"`：**OpenAI 兼容的 chat/completions**，形状完全不同，
+   *   进出一趟都要经 `../src/shared/llm-broker.js` 翻译
+   */
+  kind?: "systemone" | "llm";
 }
 
 /** 请求体上限，防止被当成任意转发代理滥用 */
@@ -246,11 +279,27 @@ export function makeHandler(up: Upstream) {
     }
 
     // 模型与凭据一律由服务端决定，忽略客户端传来的任何认证信息。
-    // 判别值也在这里归一化 —— 客户端发的是语义（noul），拼成什么样由**本上游**决定
-    const payload = normalizeQuestionTypes(
-      { ...(body as Record<string, unknown>), model: up.model },
-      up.upstream,
-    );
+    const isLlm = up.kind === "llm";
+    const questions = (body as { questions?: Questions }).questions;
+
+    let outgoing: unknown;
+    if (isLlm) {
+      // ★ Jev 形状 → LLM 形状：客户端的「有哪些题、每题问什么」在这里被拼成一段提示词。
+      // 客户端全程不知道对面是 LLM —— 它发的是 Jev 形状，翻译发生在本层
+      if (!questions || typeof questions !== "object") {
+        res.status(400).json({ error: { message: "这条上游需要 questions 字段" } });
+        return;
+      }
+      outgoing = toLlmRequest(up.model, (body as { state?: unknown }).state, questions, {
+        upstream: up.upstream,
+      });
+    } else {
+      // 判别值在这里归一化 —— 客户端发的是语义（noul），拼成什么样由**本上游**决定
+      outgoing = normalizeQuestionTypes(
+        { ...(body as Record<string, unknown>), model: up.model },
+        up.upstream,
+      );
+    }
 
     const gate = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
     try {
@@ -260,35 +309,59 @@ export function makeHandler(up: Upstream) {
           Authorization: `Bearer ${key}`,   // ← 密钥只在这一行出现，永不外泄
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(outgoing),
         signal: gate,
       });
 
       const text = await upstream.text();
 
-      // 日志里只记决策与 token，不记请求体（可能含用户上下文）
-      if (upstream.status === 200) {
-        try {
-          const d = JSON.parse(text);
-          console.log(`[${up.label}] 200 → ${summarizeAnswers(d)} ${tokensOf(d)} tok`);
-        } catch {
-          console.log(`[${up.label}] 200（响应解析失败）`);
-        }
-      } else {
+      if (upstream.status !== 200) {
         console.log(`[${up.label}] ${upstream.status}`);
-      }
-
-      if (upstream.status === 200) {
-        res.status(200);
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.send(text);
+        console.error(`[${up.label}] ${upstream.status} 上游原文：${text.slice(0, 500)}`);
+        res.status(upstream.status).json({ error: { message: publicError(upstream.status) } });
         return;
       }
 
-      // 非 200 一律**不透传上游原文** —— 那里面可能带模型名、端点、账号信息，
-      // 直接送到浏览器就等于把上游选型泄露给使用者。原文留在服务端日志备查。
-      console.error(`[${up.label}] ${upstream.status} 上游原文：${text.slice(0, 500)}`);
-      res.status(upstream.status).json({ error: { message: publicError(upstream.status) } });
+      // ★ LLM 分支：把上游回包翻译回 **Jev 形状**，让客户端完全看不出区别。
+      // 失败**值得重试** —— 实测唯一的失败形态是「推理吃光 max_tokens →
+      // content 为空 + finish_reason=length」，HTTP 200 看着像成功、实际什么都没答
+      if (isLlm) {
+        try {
+          const d = JSON.parse(text) as { choices?: unknown[] };
+          const content = extractContent(d.choices?.[0] as Parameters<typeof extractContent>[0]);
+          const answers = fromLlmContent(content, questions as Questions);
+          const u = usageOf(d);
+          console.log(
+            `[${up.label}] 200 → ${Object.keys(answers).length} 题 ` +
+              `${u.inputTokens}in/${u.outputTokens}out（推理 ${u.reasoningTokens}）`,
+          );
+          res.status(200);
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.send(
+            JSON.stringify({
+              answers,
+              usage: { inputTokens: u.inputTokens, outputTokens: u.outputTokens },
+            }),
+          );
+        } catch (e) {
+          const msg = (e as Error).message;
+          console.error(`[${up.label}] 502 broker 翻译失败：${msg}`);
+          res.status(502).json({ error: { message: `上游没有给出可用的答案：${msg}` } });
+        }
+        return;
+      }
+
+      // 日志里只记决策与 token，不记请求体（可能含用户上下文）
+      try {
+        const d = JSON.parse(text);
+        console.log(`[${up.label}] 200 → ${summarizeAnswers(d)} ${tokensOf(d)} tok`);
+      } catch {
+        console.log(`[${up.label}] 200（响应解析失败）`);
+      }
+
+      res.status(200);
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.send(text);
     } catch (e) {
       if (gate.aborted) {
         console.error(`[${up.label}] 上游超过 ${UPSTREAM_TIMEOUT_MS}ms 没有响应`);
