@@ -249,10 +249,10 @@ const COMPOSED: Record<string, readonly string[] | null> = {
   beacon: ["beacon"],
   toad: ["toad"],
   eater1: ["eater1"],
-  "block-mesh": [
-    ...Array.from({ length: 12 }, () => "block"),
-    ...Array.from({ length: 3 }, () => "blinker"),
-  ],
+  // 纯方块阵列：铺满内区，16 个方块、64 格、完全静止。
+  // 曾经掺过 3 盏信号灯，理由是「否则纯方块阵是死局」——那个理由实测不成立
+  // （死之执 64 个落点里只有 4 个会回到原局面），已去掉。
+  "block-mesh": Array.from({ length: 16 }, () => "block"),
   // 随机开局不做构成声明：噪声里恰好凑出来的方块不是我们声明的东西。
   // 它们由「seed 钉死」那条测试负责。
   "dense-random": null,
