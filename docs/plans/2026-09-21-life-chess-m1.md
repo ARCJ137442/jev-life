@@ -4,7 +4,9 @@
 
 **Goal:** 从零建立 `jev-life` 仓库，交付「能无头打完一整局 Jev vs Jev」的规则引擎与决策管线，再到本地 localhost 的可视对局。
 
-**Architecture:** 三层——`core/`（无 DOM、无网络，Node 可直接跑）、`client/`（浏览器 UI）、`server/`（静态托管 + 密钥代理）。`core/` 是本项目相对 `jev-2048` 的关键结构改动：2048 的 `buildState`/`buildQuestions` 住在 `main.ts` 且直接读 DOM（`main.ts:402-403`），导致无头环境跑不起来。
+**Architecture:** 三层——`core/`（无 DOM、无网络，Node 可直接跑）、`client/`（浏览器 UI）、`server/`（静态托管 + 密钥代理）。`core/` 是本项目相对 `jev-2048` 的关键结构改动：2048 的 `buildState`（`main.ts:388-419`）与 `buildQuestions`（`main.ts:421-445`）住在 `main.ts` 且**直接读 DOM**（`main.ts:416`），导致无头环境跑不起来。
+
+> ⚠ **引用 `main.ts` 时优先用函数名，别用行号。** 该文件迭代频繁——本计划基于 `a63309c` 写成，到 `9582bcf` 时它已漂移 13–31 行（实测：`buildState` 388–419、`buildQuestions` 421–445、`boot` 2045–2098、`$()` 139、`assertDom` 143、`DRAWERS` 1112、`showOverlay` 524、`pushLog` 726、`relanguage` 2013）。其余被引用的文件（`render.ts` / `decision.ts` / `types.ts` / `engine.ts` / `metrics.ts`）在同期没动过，行号仍然准。
 
 **Tech Stack:** TypeScript 5.9（`strict`）、Node ≥ 22（type-stripping 直接跑 `tools/*.ts`）、无打包器（浏览器原生 ESM）、无运行时依赖、`node:test` + `node:assert/strict`。
 
@@ -266,6 +268,22 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 - Create: `jev-life/tools/check-dom.ts`（**改造：递归 + 双向**）
 - Create: `jev-life/tools/scan.ts`（新增：core 分层检查）
 - Create: `jev-life/start.sh`
+- Create: `jev-life/public/index.html`（**临时占位**，T14 替换）
+- Create: `jev-life/src/server/server.ts`（**临时占位**，T12 替换）
+- Create: `jev-life/api/placeholder.ts`（**临时占位**，T12 删除）
+- Create: `jev-life/src/test/smoke.test.ts`（工具链冒烟测试）
+
+> **第四个占位是冒烟测试**，理由同上但更隐蔽：`start.sh` 里有 `node --test dist-test/test/*.test.js`，
+> 而 T2 时 `dist-test/test/` 是空的 —— bash 会把没有匹配的 glob 原样传给 node，报错退出。
+> 放一个真正断言工具链的冒烟测试（比如「Node 版本 ≥ 22」），既让管道绿，它本身也是有意义的检查。
+
+> **为什么要三个占位文件**：`start.sh` 从 T2 起就要能整条跑通，但它的后半段依赖还不存在的东西——
+> `tsc -p tsconfig.server.json` 在 `src/server/` 为空时报 `TS18003: No inputs were found`；
+> `node dist/server/server.js` 需要有可执行的东西；
+> `check-dom.ts` 要读 `public/index.html`；
+> `npm run typecheck` 里的 `tsconfig.api.json` 同样会因 `api/` 为空而报 TS18003。
+>
+> 这三个占位是**为了让管道从 T2 起就是绿的**。占位内容应当最小且诚实（顶部注释写明「T12/T14 会替换」），不要顺手把真实现写进去——那是 T12/T14 的事。
 
 **Step 1: 照搬两个安全工具**
 
@@ -1541,7 +1559,7 @@ node tools/play.ts --size 6x6 --turns 10
 - Create: `src/client/i18n.ts` ← 机制照搬，文案重写
 - Create: `src/client/config.ts`、`session.ts`、`archive.ts` ← 骨架照搬，字段换
 
-**照搬的 UI 骨架**（一字不改的部分）：`$()`（`main.ts:138-139`）、`assertDom`（`:142-150`）、`boot()` 的 try/catch 兜底（`:2032-2046`，用**手写内联样式的固定 div**，不走 toast —— 因为 toast 本身可能失效）、抽屉 + scrim（`:1094-1104`）、`toast`、`showOverlay`（`:510-531`）。
+**照搬的 UI 骨架**（一字不改的部分，按函数名找，别按行号）：`$()`（`main.ts:139`）、`assertDom`（`:143`，调用点 2047）、`boot()`（`:2045-2098`）与它后面的 `try { boot() } catch` 兜底 —— 兜底用**手写内联样式的固定 div**，不走 toast（因为 toast 本身可能失效）；抽屉 + scrim（`DRAWERS` 在 `:1112`、`openDrawer` 在 `:1114`）、`toast`、`showOverlay`（`:524`）、`pushLog`（`:726`）、`relanguage`（`:2013`）。
 
 **关卡二的验收标准**（对应计划第 5–8 条）：
 1. `./start.sh` 后在 `localhost:8787` 能开一局并看完整个过程
