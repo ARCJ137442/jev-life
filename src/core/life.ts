@@ -1,4 +1,4 @@
-import type { Board, Cell, Role } from "./types.js";
+import type { Board, Cell, Role, Topology } from "./types.js";
 import { MAX_SIZE, MIN_SIZE } from "./types.js";
 
 /**
@@ -113,4 +113,45 @@ export function legalCells(b: Board, role: Role): Cell[] {
   const out: Cell[] = [];
   for (let i = 0; i < b.cells.length; i++) if (b.cells[i] === want) out.push(i);
   return out;
+}
+
+/**
+ * B3/S23 的朴素参照实现 —— **只用于测试**。
+ *
+ * 刻意写成与 lifeStep 完全不同的思路（逐格双层循环 + 显式边界分支），
+ * 这样两个实现不会共享同一个思维错误 —— 若两边用同一套循环写边界，
+ * 一个错的对齐会在两处同时出现，差分测试就永远抓不到它。
+ * jev-2048 的差分测试用的就是这个手法（engine.test.ts 的 reference()）。
+ *
+ * 规则（B3/S23）：
+ *   死细胞周围恰好 3 个活细胞 → 诞生
+ *   活细胞周围 2 或 3 个活细胞 → 存活
+ *   其余 → 死亡
+ */
+export function referenceStep(b: Board, topo: Topology): Board {
+  const { cols, rows, cells } = b;
+  const next = new Uint8Array(cols * rows);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      let n = 0;
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          if (dr === 0 && dc === 0) continue;
+          let rr = r + dr;
+          let cc = c + dc;
+          if (topo === "torus") {
+            rr = (rr + rows) % rows;
+            cc = (cc + cols) % cols;
+          } else if (rr < 0 || rr >= rows || cc < 0 || cc >= cols) {
+            continue; // bounded：界外视为死
+          }
+          n += cells[rr * cols + cc];
+        }
+      }
+      const alive = cells[r * cols + c];
+      next[r * cols + c] = alive ? (n === 2 || n === 3 ? 1 : 0) : n === 3 ? 1 : 0;
+    }
+  }
+  return { cols, rows, cells: next };
 }
