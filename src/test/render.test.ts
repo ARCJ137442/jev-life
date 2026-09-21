@@ -25,6 +25,8 @@ import {
   FLIP_MS_BASE,
   GUTTER_K,
   PARTICLE_SIZE_MAX,
+  ROUND_OF_GLOW,
+  SCALE_OF_GLOW,
   approach,
   easeK,
   makeVisual,
@@ -383,6 +385,44 @@ test("渲染器空转一整回合不抛异常，落子相画了选框与粒子�
   const before = ctx.arcCalls.length;
   assert.equal(frame(t0 + 16 * 500), false, "停机之后还在排帧");
   assert.equal(ctx.arcCalls.length, before, "停机之后还在画东西");
+});
+
+test("时序比例：缩放/粒子占选框的一半，一轮 = 2 倍选框时长", () => {
+  // 用户定的比例：**缩放 : 粒子 : 选框 : 落子→演化的间隔 = 1 : 1 : 2 : 2**
+  // （见 docs/ui-spec.md 第三节）
+  //
+  // 这条是**规格守卫**：早先的实现让缩放、粒子、选框都跟着 `flipMs` 走
+  // （三者同长），用户看实物后指出选框要比缩放留得久 —— 选框要回答
+  // 「这是谁落的子」，而缩放只是「这里刚变过」的反馈，同长就分不出主次。
+  assert.equal(SCALE_OF_GLOW, 0.5, "缩放/粒子应当只占选框的一半");
+  assert.equal(ROUND_OF_GLOW, 2, "一轮应当是选框时长的两倍");
+
+  const { frame } = installRaf();
+  const { canvas } = fakeCanvas();
+  const r = new BoardRenderer(canvas, PALETTE);
+  r.flipMs = 1000;
+  r.resize(400, 400, 4, 4);
+
+  const mid = flip(BOARD, cell(2, 2));
+  const after = lifeStep(mid, "bounded");
+  const t0 = performance.now();
+  r.playTurn({ mid, after, flips: [{ cell: cell(2, 2), role: "life" }] });
+
+  // ⚠ **必须逐帧推进**：渲染器把单帧 dt 上限压在 60ms（防跳帧），
+  //    稀疏地跳时钟等于「只过了几帧」，动画根本没往前走
+  let i = 0;
+  /** 一路推进到 t0+ms；返回推进完之后循环还活着吗 */
+  const advance = (ms: number): boolean => {
+    while ((i + 1) * 16 <= ms) {
+      i++;
+      if (!frame(t0 + 16 * i)) return false; // 已经没有排帧了
+    }
+    return true;
+  };
+
+  assert.equal(advance(880), true, "落子相没到 1s 就停了");
+  assert.equal(advance(1440), true, "演化相与空余那两段没跑");
+  assert.equal(advance(2100), false, "过了 2 倍选框时长还在排帧");
 });
 
 test("动效关掉时不排帧，且两副棋盘当场落地", () => {

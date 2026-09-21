@@ -90,6 +90,31 @@ export const FLIP_MS_BASE = 420;
 export const FLIP_MS = 1000;
 
 /**
+ * 缩放与粒子占**选框**时长的比例。
+ *
+ * 用户定的比例是
+ *
+ *     缩放 : 粒子 : 选框 : 落子→演化的间隔 = 1 : 1 : 2 : 2
+ *
+ * 而 `flipMs` 是其中**选框**那一段（它同时也是落子到演化的间隔）——
+ * 所以缩放与粒子只占它的一半。早先的实现让三者都跟着 `flipMs` 走，
+ * 那是错的：选框要回答「这是**谁**落的子」，而缩放只是「这里刚变过」的反馈，
+ * 两者同长就分不出主次。
+ */
+export const SCALE_OF_GLOW = 0.5;
+
+/**
+ * 一轮动画的总时长 = 选框时长的几倍。
+ *
+ * 展开是：落子相 1 段（选框铺满）→ 演化相 1 段（缩放 + 粒子，无选框）
+ * → 空余 1 段。后两段合起来是「落子到演化」的间隔那么长，所以一轮 = 2 倍。
+ *
+ * **空余是刻意的**：演化演完立刻接下一回合的话，眼睛来不及把
+ * 「刚才发生了什么」看完 —— 而这一局的信息量本来就比 2048 大得多。
+ */
+export const ROUND_OF_GLOW = 2;
+
+/**
  * 把「每帧逼近比例」按倍数换算成另一条时间线。
  *
  * 指数补间没有「时长」这个参数，它的时长体现在**多久走到停机判据**上：
@@ -363,17 +388,27 @@ export class BoardRenderer {
   private lastTs = 0;
   /** 演化相：到点之前先画落子相 */
   private pending: { board: Board; at: number } | null = null;
+  /**
+   * 本轮动画的终点（rAF 时间戳）。0 = 当前没有在跑的轮次。
+   *
+   * 用它而不是「等补间自己停」：指数补间是渐近的，停机判据受帧率与阈值影响，
+   * 拿它当节拍器会得到抖动的轮长（有时 1.8s 有时 2.3s），而空余那一段
+   * 恰恰是「让人看完刚才发生了什么」—— 抖动就等于有时够看、有时不够。
+   */
+  private roundEndsAt = 0;
   /** 补间开关。关掉后所有过渡瞬时完成 */
   animations = true;
   /** 落子粒子 */
   particlesEnabled = true;
   /**
-   * 落子相时长（ms）。**整套动画的节奏都由这一个数决定**：
-   * 演化相排在它之后，选框与粒子按同一个倍数拉长。
+   * **选框**的时长（ms）—— 整套动画的基准，不是「落子相总长」。
    *
-   * 只让学生缩短落子相、而特效各按各的常量走的话，把落子相调到 2 秒会得到
-   * 「格子早就不动了、选框和粒子还在飘」—— 那不是「看得更清楚」，
-   * 是三个不同步的动画叠在一起。所以这里的每个速率都从它换算（`scaleRate`）。
+   * 用户定的比例是 `缩放 : 粒子 : 选框 : 落子→演化的间隔 = 1 : 1 : 2 : 2`。
+   * 这个数对应其中**选框**那一段（它同时也是落子到演化的间隔），
+   * 缩放与粒子按 `SCALE_OF_GLOW` 取它的一半，一轮总计 `ROUND_OF_GLOW` 倍。
+   *
+   * 改它就等于整体变速：`scaleRate` 会把各条速率精确换算过去，
+   * 所以不会出现「格子早就不动了、选框还在飘」那种三拍子不同步。
    */
   flipMs = FLIP_MS;
 
@@ -482,7 +517,12 @@ export class BoardRenderer {
       return;
     }
     // rAF 的时间戳与 performance.now() 同源，可以直接比
-    this.pending = { board: anim.after, at: performance.now() + this.flipMs };
+    const now = performance.now();
+    this.pending = { board: anim.after, at: now + this.flipMs };
+    // 一轮的终点定死在时间线上，而不是「等到补间自己停」——
+    // 指数补间是渐近的，它的停机判据受帧率与判据阈值影响，
+    // 拿它当节拍器会得到「有时 1.8s 有时 2.3s」的抖动
+    this.roundEndsAt = now + this.flipMs * ROUND_OF_GLOW;
     this.start();
   }
 
@@ -501,6 +541,7 @@ export class BoardRenderer {
    */
   toggle(board: Board, cell: Cell): void {
     this.pending = null;
+    this.roundEndsAt = 0;
     const flips = new Map<Cell, Role | null>([[cell, null]]);
     this.applyBoard(board, flips);
     this.draw();
@@ -509,6 +550,7 @@ export class BoardRenderer {
   /** 直接落到一副棋盘上（开新局、恢复存档、改尺寸）。不走动画 */
   setBoard(board: Board): void {
     this.pending = null;
+    this.roundEndsAt = 0;   // 直接落盘 = 不在任何一轮动画里
     this.applyBoard(board, null, true);
     this.particles = [];
     this.draw();
@@ -517,6 +559,7 @@ export class BoardRenderer {
   clear(): void {
     this.cancel();
     this.pending = null;
+    this.roundEndsAt = 0;
     this.visuals.clear();
     this.particles = [];
     this.draw();
@@ -615,9 +658,9 @@ export class BoardRenderer {
         vy: Math.sin(ang) * sp,
         size: PARTICLE_SIZE_MIN + Math.random() * (PARTICLE_SIZE_MAX - PARTICLE_SIZE_MIN),
         age: 0,
-        // 粒子的存续时间跟着落子相一起缩放 —— 落子相拉长了而粒子照旧一闪而过的话，
-        // 「延长了」只延长了个寂寞
-        ttl: PARTICLE_TTL * this.tempo * (0.7 + Math.random() * 0.65),
+        // 粒子的存续时间跟着**缩放**那条时间线走（不是选框那条）——
+        // 比例表里粒子与缩放同为 1 份，而选框是 2 份
+        ttl: PARTICLE_TTL * this.tempo * SCALE_OF_GLOW * (0.7 + Math.random() * 0.65),
         color,
       });
     }
@@ -645,9 +688,10 @@ export class BoardRenderer {
     const dt = rawDt / 16.667; // 以「帧」为单位的归一化步长
     const dtSec = rawDt / 1000;
     this.lastTs = ts;
-    // 补间与选框都按同一个节奏倍数放慢（见 `flipMs`）
+    // ⚠ 缩放与选框**不是**同一个节奏倍数（见 SCALE_OF_GLOW）：
+    //    选框铺满整个落子相，缩放与粒子只占它的一半
     const tempo = this.tempo;
-    const k = easeK(dt, scaleRate(EASE, tempo));
+    const k = easeK(dt, scaleRate(EASE, tempo * SCALE_OF_GLOW));
     const kGlow = easeK(dt, scaleRate(EASE_GLOW, tempo));
 
     // 落子相演完 → 接上演化相
@@ -657,7 +701,9 @@ export class BoardRenderer {
       this.applyBoard(board, null);
     }
 
-    let busy = this.pending !== null;
+    // 演化相 + 空余：到 roundEndsAt 之前都算「还在演」
+    if (this.roundEndsAt !== 0 && ts >= this.roundEndsAt) this.roundEndsAt = 0;
+    let busy = this.pending !== null || this.roundEndsAt !== 0;
 
     for (const [cell, v] of this.visuals) {
       if (tweenVisual(v, k, kGlow)) busy = true;
