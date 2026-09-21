@@ -479,6 +479,11 @@ function buildNoulAll(input: StateInput, backend: string): Questions {
     );
   }
 
+  // 判别值按**界面上的后端 id** 取。对直连后端（自己带密钥打到网关那份）这就是
+  // 最终值；对代管代理（免费试用 1 / 2）它只是客户端**能知道的那一半** ——
+  // 代理会在转发前按它自己的上游再归一化一次（`shared/types.ts` 的
+  // `normalizeQuestionTypes`）。**别为了代理在这里改什么**：客户端本来就无从
+  // 知道代理转发到哪，按 id 猜正是那个「一发就 400」的来源。
   const type = noulDiscriminator(backend);
   const out: Record<string, Question> = {};
 

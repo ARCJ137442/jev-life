@@ -48,10 +48,76 @@ import type { Board, Cell } from "../core/types.js";
 export type NoulType = "noul" | "boolean";
 export type QuestionType = NoulType | "choice" | "score";
 
-/** 某后端下布尔类型的实际判别值。默认（含未知后端）取 noul */
-export function noulDiscriminator(backend: string): NoulType {
+/**
+ * 某个**网关**对布尔型判别值的实际拼写。默认（含认不出的网关）取 noul。
+ *
+ * ⚠ 参数是**网关本身**，不是「界面上选了哪个后端」。两者在直连时恰好相同，
+ * 在代管代理上**不是一回事** —— 免费试用 1 的后端 id 是 `localproxy`，
+ * 它背后的网关却是 Vercel。传错的样子是一个 400，见 `normalizeQuestionTypes`。
+ */
+export function noulDiscriminator(gateway: string): NoulType {
   // Vercel 的封装使用了 boolean，其余（官方 / OpenRouter / AI-ML-API）都是 noul
-  return backend === "vercel" ? "boolean" : "noul";
+  return gateway === "vercel" ? "boolean" : "noul";
+}
+
+/**
+ * 把请求体里 `questions[*].type` 归一化成**本上游要的那个写法**。
+ *
+ * ═══ 为什么由服务端做 ═══
+ *
+ * DESIGN.md 第八节那条约束：**中间那层必须真的兼容**。代理知道自己的上游是谁，
+ * 翻译就该由它做 —— 客户端只发**语义**（`noul` = 这是一道布尔题），不猜上游
+ * 怎么拼这个值。反过来说客户端也猜不了：代管代理的客户端 id 与真实上游不是
+ * 一回事，按 id 推判别值必然推错。
+ *
+ * 实测过一次，症状是**默认的免费试用后端一发就 400**：
+ *
+ *   questions.flip_2_2.type: Invalid discriminator value.
+ *   Expected 'boolean' | 'choice' | 'score'
+ *
+ * ═══ 客户端发什么 → 上游收到什么 ═══
+ *
+ *   ┌─────────────────┬──────────────────────────┬──────────┬──────────┐
+ *   │ 界面上的后端     │ 真实上游                  │ 客户端发 │ 转发后   │
+ *   ├─────────────────┼──────────────────────────┼──────────┼──────────┤
+ *   │ 免费试用 1       │ Vercel AI Gateway        │ noul     │ boolean  │
+ *   │ 免费试用 2       │ OpenRouter               │ noul     │ noul     │
+ *   │ 官方 / AI-ML-API │ 同左（目前无代管）         │ noul     │ noul     │
+ *   └─────────────────┴──────────────────────────┴──────────┴──────────┘
+ *
+ * **这个函数只在服务端用**：直连后端（浏览器带着自己的密钥打到网关那份）没有
+ * 中间层，客户端算出来的判别值就是最终值，不经过这里。
+ *
+ * ═══ 只动布尔族 ═══
+ *
+ * `choice` / `score` 四家拼写一致，没有可翻译的东西，一律不碰（别顺手改）。
+ * 布尔族那两种拼写（`noul` / `boolean`）是**同一个语义的两个名字**，所以两个
+ * 方向都归一化 —— 于是「已经是上游要的写法」时本函数是恒等的，重复调用无害。
+ *
+ * 纯函数：**不改动入参**。有新值时返回新对象，没有时原样返回入参本身。
+ */
+export function normalizeQuestionTypes<T>(body: T, upstream: string): T {
+  const target = noulDiscriminator(upstream);
+
+  // 形状不对就原样放行 —— 上游给出的「expected record, received array」比
+  // 我们在这里编一句更准，而且这一层没有资格替上游做校验
+  const questions = (body as { questions?: unknown } | null | undefined)?.questions;
+  if (questions === null || typeof questions !== "object" || Array.isArray(questions)) return body;
+
+  let changed = false;
+  const out: Record<string, unknown> = {};
+  for (const [key, question] of Object.entries(questions as Record<string, unknown>)) {
+    const type = (question as { type?: unknown } | null | undefined)?.type;
+    if ((type === "noul" || type === "boolean") && type !== target) {
+      out[key] = { ...(question as Record<string, unknown>), type: target };
+      changed = true;
+    } else {
+      out[key] = question;
+    }
+  }
+
+  if (!changed) return body;
+  return { ...(body as Record<string, unknown>), questions: out } as T;
 }
 
 /**

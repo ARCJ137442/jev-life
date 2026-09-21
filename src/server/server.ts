@@ -22,6 +22,7 @@ import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { unseal } from "./seal.js";
 import { DEFAULT_TIMEOUT_MS, startTimeout } from "../shared/backend.js";
+import { normalizeQuestionTypes } from "../shared/types.js";
 
 /* ═══════════ 配置 ═══════════ */
 
@@ -40,8 +41,13 @@ const LOCAL_DIR = join(HERE, "..", "local");
  *   - 模型 ID 命名空间也不同
  *
  * ★ 2048 的主流程走 `choice`，两边一致，所以那处差异它从没真的踩到过。
- * **生命棋的 noul 通道是第一次真的走这条路径** —— 判别值由客户端组题时按
- * `noulDiscriminator(backend)` 决定，代理只负责转发，不猜。
+ * **生命棋的 noul 通道是第一次真的走这条路径** —— 它第一次真跑就撞上了那个 400：
+ * 客户端组题时按界面上的后端 id 取判别值（`localproxy` → `noul`），而这条
+ * 代理转发到的是 Vercel（要 `boolean`）。
+ *
+ * 修法不是让客户端更聪明，而是**让知道上游是谁的那一层翻译**：客户端只发
+ * 语义（`noul`），下面每个上游要什么由这张表说了算 —— 见
+ * `normalizeQuestionTypes` 与 `handleEvaluate` 里那一次调用。
  */
 interface Upstream {
   /** 端点路径（本机服务器暴露给浏览器的） */
@@ -56,6 +62,14 @@ interface Upstream {
   model: string;
   /** 面向用户的标识，仅用于日志与健康检查 */
   label: string;
+  /**
+   * 这条代理**背后的真实上游**。判别值按它算（`normalizeQuestionTypes`）。
+   *
+   * ⚠ 它**不是浏览器那边的后端 id。** 界面上的「Jev 免费试用 1」id 是
+   * `localproxy`，与 Vercel 毫无字面关系 —— 正是这个错位造成了那个 400。
+   * 所以这一栏在这里显式声明，不靠 `route` 或 `label` 反推。
+   */
+  upstream: string;
 }
 
 const UPSTREAMS: Upstream[] = [
@@ -66,6 +80,7 @@ const UPSTREAMS: Upstream[] = [
     keyFile: "vercel-secret-api-key",
     model: "typesafe-ai/jev",
     label: "free-trial",
+    upstream: "vercel",
   },
   {
     route: "/api/evaluate2",
@@ -74,6 +89,7 @@ const UPSTREAMS: Upstream[] = [
     keyFile: "openrouter-secret-api-key",
     model: "typesafe/jev-1.13",
     label: "free-trial-2",
+    upstream: "openrouter",
   },
 ];
 
@@ -299,6 +315,12 @@ async function handleEvaluate(
   // 模型 ID 的命名空间两家不同（typesafe-ai/jev vs typesafe/jev-1.13），
   // 所以取上游表里的值而不是客户端的。
   payload.model = up.model;
+
+  // 判别值同理，而且更隐蔽：客户端按界面上的后端 id 取（免费试用 1 → noul），
+  // 而这条代理真正的上游是 Vercel（要 boolean）。翻译在这里做 —— 客户端不该
+  // 知道、也无从知道代理转发到哪。漏掉这一行，症状是默认的免费后端一发就 400，
+  // 而错误原文被下游刻意挡掉，浏览器侧只剩一句「后端暂时不可用」。
+  payload = normalizeQuestionTypes(payload, up.upstream);
 
   const t0 = Date.now();
   let status = 502;

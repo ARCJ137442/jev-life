@@ -20,4 +20,7 @@ export default makeHandler({
   url: "https://openrouter.ai/api/v1/systemone",
   envKey: "OPENROUTER_API_KEY",
   model: "typesafe/jev-1.13",
+  // OpenRouter 要的判别值恰好与客户端发的一致。**仍然要显式写出来** ——
+  // 「恰好一致」是这一条上游的性质，不是通例（Vercel 就是反例）
+  upstream: "openrouter",
 });

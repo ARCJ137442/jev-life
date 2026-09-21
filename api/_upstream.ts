@@ -39,6 +39,14 @@ export interface Upstream {
    * `typesafe-ai/jev` 在 OpenRouter 上都会报「模型不存在」）。
    */
   model: string;
+  /**
+   * 这条代理**背后的真实上游**。
+   *
+   * ⚠ 它**不是**界面上的后端 id：那两条代管后端的 id 是 `localproxy` /
+   * `openrouterproxy`，与「转发到哪」无关。判别值必须按这一个字段算 ——
+   * 按客户端 id 算就是那次「默认免费后端一发就 400」的根因。
+   */
+  upstream: string;
 }
 
 /** 请求体上限，防止被当成任意转发代理滥用 */
@@ -131,6 +139,56 @@ function summarizeAnswers(parsed: unknown): string {
 }
 
 /**
+ * 把请求体里 `questions[*].type` 归一化成**本上游要的那个写法**。
+ *
+ * ═══ 为什么由服务端做 ═══
+ *
+ * DESIGN.md 第八节那条约束：**中间那层必须真的兼容**。代理知道自己的上游是谁，
+ * 翻译就该由它做 —— 客户端只发**语义**（`noul` = 这是一道布尔题），不猜上游
+ * 怎么拼这个值。反过来说客户端也猜不了：代管后端的 id（`localproxy`）与它
+ * 背后的真实上游（Vercel）不是一回事，按 id 推判别值必然推错。
+ *
+ * 实测过一次，症状是**默认的免费试用后端一发就 400**：
+ *
+ *   questions.flip_2_2.type: Invalid discriminator value.
+ *   Expected 'boolean' | 'choice' | 'score'
+ *
+ * ═══ 客户端发什么 → 上游收到什么 ═══
+ *
+ *   免费试用 1 → Vercel        客户端发 noul → 转发 boolean
+ *   免费试用 2 → OpenRouter    客户端发 noul → 转发 noul
+ *
+ * ⚠ 与 `src/shared/types.ts` 的 `normalizeQuestionTypes` 是**同源的重复**：
+ * `api/` 刻意不引 `src/`（理由见 UPSTREAM_TIMEOUT_MS 那段），所以这里留一份。
+ * **改一处记得改另一处** —— `src/test/normalize.test.ts` 对两份都做了测试
+ * （这一份是行为级的：配一个假 fetch，直接看真正发出去的请求体）。
+ *
+ * 纯函数：不改动入参。只动布尔族（`noul` / `boolean` 是同一语义的两种拼写），
+ * `choice` / `score` 四家一致，一律不碰。
+ */
+function normalizeQuestionTypes<T>(body: T, upstream: string): T {
+  const target = upstream === "vercel" ? "boolean" : "noul";
+
+  const questions = (body as { questions?: unknown } | null | undefined)?.questions;
+  if (questions === null || typeof questions !== "object" || Array.isArray(questions)) return body;
+
+  let changed = false;
+  const out: Record<string, unknown> = {};
+  for (const [key, question] of Object.entries(questions as Record<string, unknown>)) {
+    const type = (question as { type?: unknown } | null | undefined)?.type;
+    if ((type === "noul" || type === "boolean") && type !== target) {
+      out[key] = { ...(question as Record<string, unknown>), type: target };
+      changed = true;
+    } else {
+      out[key] = question;
+    }
+  }
+
+  if (!changed) return body;
+  return { ...(body as Record<string, unknown>), questions: out } as T;
+}
+
+/**
  * 生成一个处理函数。两个 evaluate*.ts 各自导出一个实例。
  */
 export function makeHandler(up: Upstream) {
@@ -187,8 +245,12 @@ export function makeHandler(up: Upstream) {
       return;
     }
 
-    // 模型与凭据一律由服务端决定，忽略客户端传来的任何认证信息
-    const payload = { ...(body as Record<string, unknown>), model: up.model };
+    // 模型与凭据一律由服务端决定，忽略客户端传来的任何认证信息。
+    // 判别值也在这里归一化 —— 客户端发的是语义（noul），拼成什么样由**本上游**决定
+    const payload = normalizeQuestionTypes(
+      { ...(body as Record<string, unknown>), model: up.model },
+      up.upstream,
+    );
 
     const gate = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
     try {
