@@ -61,10 +61,10 @@ Compared to that one, it carries **two increments you can lift out on their own*
 | Vercel | <https://jev-life.vercel.app> | Ships serverless functions; the three "Free Trial" backends work same-origin |
 | GitHub Pages | <https://arcj137442.github.io/jev-life/> | Static only; calls the free-trial endpoints on the deployment above cross-origin |
 
-> ⚠️ **Neither is deployed yet** (as of this README, both are 404). The addresses above are the targets already written into the repository: the Vercel domain comes from `homepage` in `package.json`, the Pages domain from the repository name. Deployment steps are in [`DEPLOY.md`](DEPLOY.md).
+> ✅ **Both are deployed and live** (released `1.0.0` on `2026-09-21`). The addresses above are real — click through and play, no API key needed. You can also deploy your own; steps are in [`DEPLOY.md`](DEPLOY.md), and **forks must set `JEV_LIFE_REMOTE_BASE`** (section 3 of that document explains what happens if you don't).
 
-Once deployed, both forms can reach the built-in "Free Trial" backends with no API key required
-(for Pages you must first set the `JEV_LIFE_REMOTE_BASE` repository variable — see [`DEPLOY.md`](DEPLOY.md)).
+Both forms can reach the built-in "Free Trial" backends with no API key required
+(the Pages build points at the Vercel one through the `JEV_LIFE_REMOTE_BASE` repository variable — see [`DEPLOY.md`](DEPLOY.md)).
 Quota is limited; when it runs out the app prompts you to switch to your own key. See "Getting Started" below to run it locally instead.
 
 > ⚠️ **The "Free Trial" quota comes out of the original author's own pocket — please don't abuse it.**

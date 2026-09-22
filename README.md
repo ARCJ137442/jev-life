@@ -76,11 +76,12 @@
 | Vercel | <https://jev-life.vercel.app> | 自带服务端函数，三条「免费试用」后端同源可用 |
 | GitHub Pages | <https://arcj137442.github.io/jev-life/> | 纯静态，跨域调用上面那份的免费试用端点 |
 
-> ⚠️ **这两处目前都还没部署**（本 README 写成时点开是 404）。上面是仓库里已经写定的目标地址：
-> Vercel 域名来自 `package.json` 的 `homepage`，Pages 域名由仓库名决定。部署步骤见 [`DEPLOY.md`](DEPLOY.md)。
+> ✅ **两处都已部署并在跑**（`2026-09-21` 发布 `1.0.0`）。上面就是实际地址，点开即可试玩、无需配置密钥。
+> 想自己部署一份也可以 —— 步骤见 [`DEPLOY.md`](DEPLOY.md)；**fork 的话要先改 `JEV_LIFE_REMOTE_BASE`**
+> （那份文档的第三节说明了不改会发生什么）。
 
-部署完成后，两种形态都能用到内置的「免费试用」后端，无需配置密钥即可试玩
-（Pages 那份要先在仓库变量里配好 `JEV_LIFE_REMOTE_BASE`，见 [`DEPLOY.md`](DEPLOY.md)）。
+两种形态都能用到内置的「免费试用」后端，无需配置密钥即可试玩
+（Pages 那份靠仓库变量 `JEV_LIFE_REMOTE_BASE` 指向 Vercel 那份，见 [`DEPLOY.md`](DEPLOY.md)）。
 额度有限，用尽时会提示切换到自己的 API 密钥 —— 也可用下面「快速开始」在本地跑。
 
 > ⚠️ **「免费试用」那份额度由原作者自费提供，请勿滥用。**
