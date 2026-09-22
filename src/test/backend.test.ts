@@ -333,12 +333,41 @@ test("重试回调把「第几次、为什么、等多久」告诉界面", async
    四、超时（源仓库全层没有这条）
    ══════════════════════════════════════════════════════════════════ */
 
-test("★ 超时：抛 JevError、标 retryable、message 里点明是超时", async () => {
-  // 永不回包的 fetch，但**必须响应 abort** —— 否则这个测试自己会挂住
-  const hang: FetchLike = (_url, init) =>
+/**
+ * 一个**永不回包、但响应 abort** 的假 fetch —— 测超时用。
+ *
+ * ⚠ 它必须自己**撑着事件循环**，否则整条用例会挂，而且报错完全指不到原因。
+ *
+ * `startTimeout` 的定时器是 **`unref()` 过的**（见它的注释）。生产环境里没问题：
+ * 真实 `fetch` 的 I/O 撑着循环，到点就响。而这里的假 fetch 是**纯 JS**、
+ * 不带任何 I/O —— 事件循环会当场空掉，那个被 unref 的定时器**再也不会响**，
+ * promise 永不落定。
+ *
+ * 症状很容易认错：node:test 报的**不是**「超时」，而是
+ * `Promise resolution is still pending but the event loop has already resolved`，
+ * 并且把**同一个文件里后面所有用例**一起标成 `cancelledByParent` ——
+ * 于是一条真因看起来像二十几条。
+ *
+ * 它还是**环境相关**的：那一刻有没有别的活撑着循环，决定了它红还是绿。
+ * 真机上它就是这么在 GitHub CI（Node 22）上挂掉、本地（Node 25）却全绿的。
+ */
+function hangUntilAbort(): FetchLike {
+  return (_url, init) =>
     new Promise((_resolve, reject) => {
-      init.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      // ★ 这个定时器**不 unref**：它唯一的任务就是让事件循环活着，
+      // 好给 `startTimeout` 那个 unref 过的定时器一个响的机会。
+      // 走到这里说明 abort 根本没来（超时机制整个没生效）—— 拒绝掉，别静默挂住
+      const keepAlive = setTimeout(() => reject(new Error("假 fetch 等不到 abort")), 5000);
+      init.signal?.addEventListener("abort", () => {
+        clearTimeout(keepAlive);
+        reject(new Error("aborted"));
+      });
     });
+}
+
+test("★ 超时：抛 JevError、标 retryable、message 里点明是超时", async () => {
+  // 永不回包的 fetch，但**必须响应 abort**，且必须自己撑着事件循环（见上）
+  const hang: FetchLike = hangUntilAbort();
 
   await assert.rejects(
     () =>
@@ -358,13 +387,10 @@ test("★ 超时：抛 JevError、标 retryable、message 里点明是超时", a
 
 test("超时后重试：每次尝试都有自己的超时，upstreamCalls 如实计数", async () => {
   let n = 0;
-  const slowThenOk: FetchLike = async (_url, init) => {
+  const slowThenOk: FetchLike = async (url, init) => {
     n++;
-    if (n === 1) {
-      await new Promise<void>((_r, reject) => {
-        init.signal?.addEventListener("abort", () => reject(new Error("aborted")));
-      });
-    }
+    // 第一次让它挂到超时（同样必须自己撑着事件循环，见 `hangUntilAbort`）
+    if (n === 1) return hangUntilAbort()(url, init);
     return toResponse(ok(ANSWERS, { inputTokens: 5 }));
   };
 

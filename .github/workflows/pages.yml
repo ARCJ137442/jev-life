@@ -5,7 +5,7 @@ name: Deploy to GitHub Pages
 # ⚠ GitHub Pages 只有静态文件，没有 Serverless Function ——
 #   所以「免费试用」与「LLM 免费试用」这些后端在这里是**跨域调用 Vercel 上那份部署**。
 #   密钥仍然只在 Vercel 的函数进程里，静态页面拿不到任何凭据。
-#   远端地址由 src/client/api.ts 的 REMOTE_PROXY_BASE 决定。
+#   远端地址由 src/client/deploy.ts 的 REMOTE_PROXY_BASE 决定（默认空值）。
 #
 # ⚠ REMOTE_PROXY_BASE 必须与实际的 Vercel 域名一致，否则静态版跨域调不通，
 #   而且失败是静默的（页面能开，只是所有请求 404）。
