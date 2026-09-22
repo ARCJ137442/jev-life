@@ -10,8 +10,14 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { dictFor } from "../client/i18n.js";
+
+// 编译产物在 dist-test/test/，往上两级才是仓库根（与 smoke.test.ts 同一手法）
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 test("★ zh 与 en 的 key 集合必须完全一致 —— 缺一边时 t() 会静默回落", () => {
   // 两边一起改是写在 `i18n.ts` 文件头里的规矩，但在此之前**没有任何东西守着它**。
@@ -55,6 +61,42 @@ test("词条的格式位（{name}）两张表里要成对出现", () => {
       placeholdersOf(en[key]),
       placeholdersOf(val),
       `${key} 的两份译文用的参数名不一致`,
+    );
+  }
+});
+
+test("★ 产品名只许有一种写法：`The Chess of Life`，不是 `Life Chess`", () => {
+  // 名字借自康威的 **The Game of Life** —— 构词是 `The X of Life`。
+  // **词序一反，借来的那个类比就整个消失了**：`Life Chess` 读起来只是
+  // 「生命的棋」，看不出它与 `The Game of Life` 同源。
+  //
+  // 这个错全仓一度有 8 处（6 处正文 + 仓库描述 + PR 条目），其中 5 处在
+  // **用户直接看得到的词条里**。没有任何检查发现得了，因为它们全都只判别的：
+  //   · `check-dom.ts` 只查 id，不查文案
+  //   · 中英镜像检查只比**数量**，不比名字
+  //   · 词条存在性检查只管 key 在不在
+  //
+  // 名字是最容易被漏的那类 —— **它长得像对的**。所以这里给它一条自己的断言。
+  for (const lang of ["zh", "en"] as const) {
+    for (const [key, val] of Object.entries(dictFor(lang))) {
+      assert.doesNotMatch(
+        val,
+        /Life Chess/,
+        `${lang} 的 ${key} 里产品名写成了 \`Life Chess\`（应为 The Chess of Life）：${val}`,
+      );
+    }
+  }
+
+  // 两份 README 也带上 —— 那次 8 处里就有 1 处在 README 顶部的英文摘要里。
+  //
+  // ⚠ **覆盖不到的**：GitHub 的仓库描述、提给 awesome 列表的条目 ——
+  // 那些在**仓库之外**，任何仓库内的检查都够不着，只能靠人记得。
+  // 这里如实标出来，免得下一次又以为「有测试守着」。
+  for (const f of ["README.md", "README.en.md"]) {
+    assert.doesNotMatch(
+      readFileSync(join(ROOT, f), "utf8"),
+      /Life Chess/,
+      `${f} 里产品名写成了 \`Life Chess\`（应为 The Chess of Life）`,
     );
   }
 });
