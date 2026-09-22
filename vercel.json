@@ -5,15 +5,12 @@
   "framework": null,
   "functions": {
     "api/evaluate.ts": {
-      "memory": 256,
       "maxDuration": 60
     },
     "api/evaluate2.ts": {
-      "memory": 256,
       "maxDuration": 60
     },
     "api/evaluate3.ts": {
-      "memory": 256,
       "maxDuration": 60
     }
   },

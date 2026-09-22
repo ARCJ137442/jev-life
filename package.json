@@ -20,5 +20,5 @@
     "start": "node dist/server/server.js"
   },
   "devDependencies": { "@types/node": "^22.20.4", "typescript": "^5.9.3" },
-  "engines": { "node": ">=22" }
+  "engines": { "node": "22.x" }
 }

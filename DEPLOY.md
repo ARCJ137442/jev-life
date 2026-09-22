@@ -46,15 +46,47 @@
 2. **Import Git Repository** → 第一次用要先 **Add GitHub Account** 授权
    （只授权这一个仓库即可）
 3. 选中你的仓库 → **Import**
+4. 如果展开了 **Configure Project**：**Framework Preset 保持默认的 `Other`**
+   （自动识别成 `Other` 就对了，别去挑 `Next.js` / `Vite` / `Create React App` 之类）
 
 Vercel 会自己读仓库里的 `vercel.json`，构建配置不用手填。
 
+> ⚠ **为什么框架预设要留 `Other`**：`vercel.json` 里写的是 `"framework": null`
+> 加**显式的** `buildCommand` 与 `outputDirectory`。选任何具体框架预设，都会套上
+> 那个框架自己的默认输出目录与构建命令，与仓库里的声明**冲突** ——
+> 而冲突的结果**不是报错**，是构建出一个空站点或者一个错目录的站点，
+> 界面能打开、资源全 404。本项目的构建产物在 `public/`（由 `tsconfig.client.json`
+> 编译出来），不是任何框架的默认目录。
+
 ### 2. 配置环境变量
 
-**在点 Deploy 之前**，展开 **Environment Variables**，按上表添加。
-填在 Production / Preview / Development 三个环境下（默认全选）。
+**在点 Deploy 之前**，展开 **Environment Variables**，按上表逐条添加。
+每条要设两栏：
+
+| 这一栏 | 选什么 |
+|---|---|
+| **Type（类型）** | **Secret** |
+| **Environments（环境）** | **Production + Preview**（**不要**勾 Development） |
+
+**类型选 Secret 的理由**：Secret 保存后**只写不可读** —— 谁也读不回来，只有构建与
+函数运行时能用它。三把钥匙都是 API key / token，正属于这一类。
+
+**环境只勾 Production + Preview 的理由**：
+
+- 本项目的**本地开发根本不读 Vercel 环境变量**。本地服务器（`./start.sh` 启动的那个）
+  是从**仓库外**的 `../local/` 目录读密钥文件，三档优先级：
+  环境变量 > `*.sealed` > 明文（见 `src/server/server.ts` 的 `loadKey`）。
+  所以勾 Development **不会**让本地多出任何东西。
+- 勾了也拿不到值：Secret 是只写的，`vercel env pull` 拉下来的只是**占位符**，
+  不是真值 —— 本地要能跑，密钥得自己放到 `../local/`。
+- **Preview 要勾**：每次预览部署是**独立域名**，不勾的话预览版一律回 503。
+  上线前拿预览域名验一遍（见下一节的三条 URL）是最省事的做法。
 
 ⚠️ **变量名必须一模一样**，大小写敏感。
+
+> Secret 的值**填进去就再也读不出来了**（连你自己在控制台里也看不到）。
+> 先把原始密钥存到别处再填。要换值就编辑这一条重填一遍；
+> **改 key 名只能删了重建**（Secret 不允许原地改 key）。
 
 写错时函数返回 503，但**错误信息不会告诉你缺哪个变量** —— 这是刻意的：
 响应体里出现 `AGNES_API_KEY` 这样的变量名，等于把「免费试用背后是哪家」直接告诉访客。
@@ -156,6 +188,19 @@ Vercel 与 GitHub Pages 都连了仓库之后，往 `main` 推代码就会自动
 
 先访问 `/api/evaluate` 看 `"ok"` 字段。`"ok":false` 就是密钥没配上。
 
+**构建日志里的 `memory` / Node 版本 warning**
+
+两条都**不用管**，本仓库已经处理过：
+
+| warning | 现状 |
+|---|---|
+| ``Provided `memory` setting in `vercel.json` is ignored on Active CPU billing`` | 内存现在只能在控制台配（项目 → **Settings → Functions**），写在 `vercel.json` 里**一律被忽略** —— 所以本仓库**不写它**。写了不但不生效，还会让读配置的人**误以为函数跑在 256 MB**。Hobby 套餐下内存不可配，按平台默认跑 |
+| `Detected "engines": { "node": ">=22" } … will automatically upgrade` | **你不会再看到这一条** —— `package.json` 现在钉的是 `"22.x"`。松散范围（`>=22`）的后果是：**将来 Node 23/24 发布时 Vercel 会自己升上去**，而运行时的变化可能悄悄发生（本仓库栽过一次「本地 Node 能跑、Vercel 加载不了」，见 `api/_upstream.ts` 顶部） |
+
+> `"22.x"` 钉的是 **Vercel 用的运行时**（CI 跑的也是 22）。
+> **本地开发仍然 ≥ 22 都能跑**，`npm ci` 时若本地 Node 不是 22.x，
+> 会打一条 `EBADENGINE` 警告 —— 那只是 npm 在报告 `engines` 不符，不影响本地开发。
+
 **LLM 免费试用 1 报「上游没有给出可用的答案」**
 
 那是 broker 层给出的诊断，最常见的原因是**推理吃光了输出预算**
@@ -165,7 +210,8 @@ Vercel 与 GitHub Pages 都连了仓库之后，往 `main` 推代码就会自动
 
 **想在局域网/本地也能用**
 
-跑 `./start.sh` 即可，它会读 `../local/` 下的密钥文件。
+跑 `./start.sh` 即可。它启动的本地服务器会从**仓库外**的 `../local/` 目录读密钥文件
+（优先级：环境变量 > `*.sealed` > 明文）。
 本地与线上用的是**同一组端点路径**，所以前端代码完全一样。
 
 **担心密钥被刷**
