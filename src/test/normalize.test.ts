@@ -194,15 +194,21 @@ interface ApiRes {
   send(body: string): void;
 }
 
-const API_MODULE = new URL("../../api/_upstream.ts", import.meta.url).href;
+// ★ 加载的是**编译产物**（`dist-api/`），不是源码。
+//
+// 「测源码」曾经是可行的，前提是 `_upstream.ts` **自包含、不 import 任何东西** ——
+// 那个前提在它开始 import broker 的那一刻就没了，而注释没跟着改，
+// 于是这里 test 得动、Vercel 却加载不了，三条线上接口全 500。
+//
+// 现在测产物，**与 Vercel 加载的是同一样东西**：tsconfig.api.json 编译它、
+// `npm test` / `start.sh` / CI 都会先跑那一步。Vercel 端的模块解析问题
+// 因此在本地就有了一条会走到的路径 —— 这正是之前缺的那条。
+//
+// ⚠ 路径里的 `../../dist-api/`：本文件编译后在 `dist-test/test/`，
+// 而产物在 `dist-api/`（与 `dist-test/` 同级），所以是往上两级再下来。
+const API_MODULE = new URL("../../dist-api/api/_upstream.js", import.meta.url).href;
 
-/**
- * 运行时加载 `api/_upstream.ts`。
- *
- * 能这么做的前提是它**自包含**（不 import 任何东西）。它旁边的
- * evaluate.ts / evaluate2.ts 就不行：那两个用 `./_upstream.js` 后缀，
- * 而 Node 的 type-stripping **不做 .js → .ts 重写**（见 CLAUDE.md 的后缀规则表）。
- */
+/** 运行时加载编译后的 api 入口。见上面那段：测的是**与 Vercel 同一份产物**。 */
 async function loadMakeHandler() {
   const mod = (await import(API_MODULE)) as {
     makeHandler(up: ApiUpstream): (req: ApiReq, res: ApiRes) => Promise<void>;

@@ -42,12 +42,15 @@ jobs:
         run: |
           node node_modules/typescript/bin/tsc -p tsconfig.client.json --noEmit
           node node_modules/typescript/bin/tsc -p tsconfig.server.json --noEmit
-          node node_modules/typescript/bin/tsc -p tsconfig.api.json
+          node node_modules/typescript/bin/tsc -p tsconfig.api.json --noEmit
           node node_modules/typescript/bin/tsc -p tsconfig.tools.json
 
       - name: 单元测试
         run: |
           node node_modules/typescript/bin/tsc -p tsconfig.test.json
+          # api/ 的产物要先编译出来：normalize.test.ts 测的是它（与 Vercel
+          # 加载的是同一份）。缺了这步，那条用例会因找不到 dist-api/ 而红
+          node node_modules/typescript/bin/tsc -p tsconfig.api.json
           node --test dist-test/test/*.test.js
 
       - name: 构建

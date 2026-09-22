@@ -4,6 +4,8 @@ node_modules/
 # 编译产物（由 ./start.sh 生成，不入库）
 dist/
 dist-test/
+# api/ 的编译产物（tsconfig.api.json 产出；normalize.test.ts 测的就是它）
+dist-api/
 public/js/
 
 # 密钥 —— 绝不能进仓库

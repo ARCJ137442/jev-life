@@ -22,18 +22,26 @@
  * 在 `api/` 里复制一份 = 一份**没有测试覆盖**的副本，而那正是本项目反复
  * 警告的「两处迟早走样」。
  *
- * Vercel 的 Node 构建基于 `@vercel/nft` 做依赖追踪，**会**跟着相对 import
- * 打包项目内的文件。部署工作流的冒烟测试会实测 `/api/evaluate3`，
- * 万一打包失败会在那里暴露。
+ * 后缀必须是 **`.js`**，不能是 `.ts`。
  *
- * ⚠ **后缀是 `.ts` 而不是 `.js`，这不是笔误。** `src/test/normalize.test.ts`
- * 用 Node 的 type-stripping **直接运行**本文件（为了配假 fetch 抓真正发出去的
- * 请求体），而 **Node 不做 `.js` → `.ts` 的重写** —— 写 `.js` 会当场
- * `ERR_MODULE_NOT_FOUND`（与 `tools/` 那堵墙是同一堵，见 `tools/_load.ts`）。
+ * ═══ 这里踩过一次，记录完整 ═══
  *
- * 能这么写的**前提**是 `llm-broker.ts` 只 import 类型（`import type`，运行期被擦除）
- * —— 它自己不 import 任何运行时代码，所以不会把 `.js` 后缀的问题带进来。
- * **将来给 broker 加运行期依赖时，这条会断，要重新想办法。**
+ * 这里一度写的是 `../src/shared/llm-broker.ts`，理由是「`src/test/normalize.test.ts`
+ * 要用 Node 的 type-stripping 直接运行本文件，而 Node 不做 `.js` → `.ts` 重写」。
+ * 那个理由**对 Node 成立、对 Vercel 不成立**：
+ *
+ *   Vercel 的 Node 运行时加载的是**编译后的 JS**，`.ts` 说明符它解析不了 ——
+ *   构建日志里是 `error TS5097`，而那是 **warning 级**：构建照常完成，
+ *   函数带着一个坏 import 上线，三条接口**全部 500 FUNCTION_INVOCATION_FAILED**。
+ *
+ * 而**本地永远看不见**：`api/` 此前没有任何编译产物、也没有任何本地执行路径
+ * （`tsconfig.api.json` 是 `noEmit`，没有任何东西会去跑 `api/*.ts`）。
+ * 部署工作流里那条冒烟测试本该兜住，但它在 `deploy.yml` 里，而这次是在
+ * Vercel 网页上导入部署的 —— 那条工作流没有 `VERCEL_TOKEN` 就 `skip` 了。
+ *
+ * 现在的做法：**后缀用 `.js`**（与 `src/` 同一条规矩），`api/` 由
+ * `tsconfig.api.json` 编译进 `dist-api/`，`normalize.test.ts` 测的是**编译产物**
+ * —— 于是「Vercel 能不能加载」这件事**在本地就有了一条会走到的路径**。
  */
 import {
   BrokerError,
@@ -49,7 +57,7 @@ import {
   type LlmMessage,
   type LlmReasoningEffort,
   type LlmUsage,
-} from "../src/shared/llm-broker.ts";
+} from "../src/shared/llm-broker.js";
 import type { Answer, Questions } from "../src/shared/types.js";
 
 /** Vercel 注入的最小请求/响应形状（只声明用到的部分，避免依赖 @vercel/node） */

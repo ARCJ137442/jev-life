@@ -1,12 +1,27 @@
 {
+  // Vercel Serverless 入口。**它现在会真的产出 JS**，不再是纯类型检查。
+  //
+  // 为什么从 `noEmit` 改成产出：`api/` 此前**没有任何本地执行路径** ——
+  // 没有编译产物、也没有任何东西会去跑 `api/*.ts`，所以「Vercel 加载得了吗」
+  // 这件事在本地**根本走不到**。代价是真的：有一次 import 写了 `.ts`
+  // （Node 能 strip、Vercel 不能），三条线上接口全部 500，而本地全绿。
+  //
+  // 现在 `normalize.test.ts` 测的是**这里编译出来的产物**，
+  // 于是那条路径在本地就有人走。
+  //
+  // ⚠ `rootDir` 是 `.` 而不是 `src`：入口在 `api/`、依赖在 `src/shared/`，
+  // 两边都要进 dist-api，相对路径才与源码里写的一致
+  // （`api/_upstream.js` 里那句 `../src/shared/llm-broker.js` 要能解析到）。
+  //
+  // 纯类型检查仍然走 `npm run typecheck`（它带 `--noEmit`）。
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
     "types": ["node"],
-    "noEmit": true,
-    "allowImportingTsExtensions": true
+    "rootDir": ".",
+    "outDir": "dist-api"
   },
   "include": ["api/**/*.ts", "src/shared/**/*.ts"]
 }

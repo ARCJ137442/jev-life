@@ -46,6 +46,10 @@ node tools/check-dom.ts || { echo "✗ HTML 与 TS 不同步，已中止启动";
 
 echo "▸ 运行单元测试…"
 node "$TSC" -p tsconfig.test.json
+# api/ 的产物：normalize.test.ts 测的是编译后的入口（与 Vercel 加载的是同一份）。
+# 少了这一步，那条用例会因为找不到 dist-api/ 而红 —— 而它正是用来抓
+# 「api/ 的 import 在 Vercel 上解析不了」那类错的
+node "$TSC" -p tsconfig.api.json
 node --test dist-test/test/*.test.js || { echo "✗ 测试未通过，已中止启动"; exit 1; }
 
 echo "▸ 编译客户端 (src/client → public/js)…"
