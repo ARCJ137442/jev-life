@@ -649,9 +649,13 @@ textarea{resize:vertical}
          所以放在尺寸与拓扑旁边，改了立即重开一局 -->
     <div class="field">
       <label data-i18n="game.mode">对局模式</label>
+      <!-- ★ 单人排在前面：它是**玩法的起点**（一个人干预一场演化），双人是从它演化出来的
+           不对称对局（生之执 / 死之执）。顺序与默认模式一致，也与叙事一致。
+           内联中文是**渐进增强的兜底**（JS 没跑起来时显示它），所以它必须与词条同步 ——
+           这里曾经留在「纯生执单人 — 只有生之执在走」，而词条早已改成「玩家」。 -->
       <select id="inpMode">
+        <option value="solo" data-i18n="game.modeSolo">单人 — 只有玩家在走</option>
         <option value="duel" data-i18n="game.modeDuel">双人对弈 — 生之执与死之执各翻一格</option>
-        <option value="solo" data-i18n="game.modeSolo">纯生执单人 — 只有生之执在走</option>
       </select>
       <!-- 措辞随模式变（选到什么就读什么），所以由 `syncModeUi()` 写 -->
       <div class="desc" id="modeNote" style="margin-top:8px;margin-bottom:0">双人对弈：生之执与死之执各翻一格，再演化一代。</div>

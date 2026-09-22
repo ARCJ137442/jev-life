@@ -30,8 +30,10 @@ Development status:
 
 An **experimental game**: a browser-based lab bench for "**write a new ruleset, then immediately watch it be played**", written entirely in [TypeScript](https://www.typescriptlang.org/).
 
-"The Chess of Life" is its first ruleset = Conway's Game of Life + turn-based intervention: **both sides flip one cell simultaneously, then the board evolves once**.
-Life pushes the board towards "alive", Death pushes it towards "dead"; whichever side keeps the live-cell ratio past its line for several consecutive turns wins.
+"The Chess of Life" is its first ruleset. It **starts with one player**: flip one cell before each evolution to steer Conway's Game of Life towards **more life** — the evolution itself is out of your hands.
+
+It **can grow into a two-player game**, and a deliberately **asymmetric** one: **Life** flips dead cells alive, **Death** flips live cells dead. Both names use 执 — "to hold", as in *holding a stone* in Go. The asymmetry is not just flavour: the two sides' legal sets are **mutually exclusive** (Life may only flip dead cells, Death only live ones), so simultaneous moves **cannot collide** and no conflict-resolution rule is needed.
+
 The rules themselves, the win lines and the opening library are all defined in this repository — and **how the rules are worded, where the win lines sit, and what the opening looks like are all yours to change**.
 
 [TypeSafe AI's "Jev"](https://www.typesafe.ai/) wears two hats here: the **tool for exploring the rules**, and the **first player** of every new ruleset.
