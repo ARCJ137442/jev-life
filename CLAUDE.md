@@ -85,9 +85,12 @@
 **本仓库不附带任何 token，fork 的人必须自备**（`DEPLOY.md` 有步骤）。
 未配密钥的上游回 **503**，不静默降级、不回落到任何内置凭据 —— 这是刻意的。
 
-> ⚠ **Fork 之后必改的一处**：`src/client/api.ts` 的 `REMOTE_PROXY_BASE`。
-> 保持默认值不会报错，但你的静态版会把请求发到**原作者的 Vercel 部署**上、
-> 花**原作者**的额度，而你这边界面一切正常。这是「静默失败」的又一种形态。
+> ⚠ **静态托管（GitHub Pages 那类）要另配远端地址**：`src/client/deploy.ts` 的
+> `REMOTE_PROXY_BASE` **默认是空字符串，刻意不给默认值** —— 空值时静态版直接隐藏
+> 那几条「免费试用」后端，什么请求都不发。要走通它们，就在仓库变量里配
+> `JEV_LIFE_REMOTE_BASE`（`pages.yml` 编译前会写进那个文件），见 `DEPLOY.md`。
+> **不要把这个地址硬编码进被跟踪的文件** —— 写死一个域名等于让别人的 fork
+> 静默消耗原作者的额度，那才是「静默失败」。
 
 ### 4. 不许用 `git add -A`
 
@@ -166,7 +169,7 @@ src/server/              带密钥代理的正式实现
   seal.ts                *.sealed 的封存 / 解封
 api/                     Vercel 三条 Serverless 入口（_upstream / evaluate / evaluate2 / evaluate3）
 public/index.html        客户端 HTML（改它或改 src/client/ 都要跑 check-dom.ts）
-src/test/                22 个测试文件，447 条用例
+src/test/                23 个测试文件，461 条用例
 tools/                   _load / bench-step / check-dom / play / scan / scan-secrets / seal-key
 docs/plans/              执行计划（M1 全部任务）
 docs/ui-spec.md          UI 规格
@@ -221,7 +224,7 @@ docs/llm-backends.md     LLM 后端规格
 
 ## 已知边界
 
-完整清单见 `DESIGN.md` 第十二节。最要紧的几条：
+完整清单见 `DESIGN.md` 第十一节。最要紧的几条：
 
 | 项 | 状态 |
 |---|---|

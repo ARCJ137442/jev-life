@@ -278,7 +278,7 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     noteKey: "backend.llmOpenaiDesc",
     // 实测：这条端点用**真的 DeepSeek key** 直连跑通过（协议形状、CORS 头
     // 都验过），而且是**两种调用策略各跑一遍** —— 一次性 JSON 与工具循环
-    // 都通了。DESIGN.md 第九节里那组付费对照用的就是这个后端。
+    // 都通了。DESIGN.md 第八节里那组付费对照用的就是这个后端。
     //
     // ⚠ 用户改填别的地址之后，那就不再是这里验过的东西了 —— 这句话对本条
     // 尤其要紧：`verified` 说的是**预置的那个端点**，不是「OpenAI 兼容」
@@ -304,7 +304,7 @@ export const BACKENDS: Record<BackendId, BackendConfig> = {
     // （请求头构造无条件带上它，见 `shared/backend.ts`），而当时那个手工
     // 探针没发这个头。真实浏览器带上它之后是通的。
     //
-    // 教训与 DESIGN.md 第九节规则 1 同源（那次也是探针把限流读成了
+    // 教训与 DESIGN.md 第八节规则 1 同源（那次也是探针把限流读成了
     // 「模型不行」）：**一个失败的探针证明不了被探的对象不行，除非先
     // 排除「探针自己错了」这个可能。** 当时直接记成了「端点连不上」，
     // 于是这条后端白白挂着「未实测」的标签。

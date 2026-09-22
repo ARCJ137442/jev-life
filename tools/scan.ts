@@ -2,7 +2,7 @@
  * 构建期检查：core/ 不得 import client/。
  *
  * 为什么需要它：
- * 跑分工具（tools/bench.ts）要在 Node 里跑同一个 core/。一旦 core/ 里的
+ * 跑分工具（tools/bench-step.ts）要在 Node 里跑同一个 core/。一旦 core/ 里的
  * 某个模块（哪怕间接）import 了 i18n 或 render，无头环境立刻崩 —— 而且崩在
  * 运行时，离真正的原因很远。
  *
@@ -218,7 +218,7 @@ if (violations.length) {
     console.error("");
   }
   console.error(
-    `\n    core/ 要在无 DOM、无网络的 Node 里跑（tools/bench.ts 依赖这一点）。\n` +
+    `\n    core/ 要在无 DOM、无网络的 Node 里跑（tools/bench-step.ts 依赖这一点）。\n` +
       `    引到 client/ 的模块会在运行时崩，而报错点离真正的原因很远。\n`,
   );
   reportUnresolved();

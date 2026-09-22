@@ -20,8 +20,8 @@
 
 **Tech Stack:** TypeScript 5.9（`strict`）、Node ≥ 22（type-stripping 直接跑 `tools/*.ts`）、无打包器（浏览器原生 ESM）、无运行时依赖、`node:test` + `node:assert/strict`。
 
-**源仓库（复刻来源）:** `/data/data/com.termux/files/home/A137442/projects/Jev/jev-2048`
-**新仓库:** `/data/data/com.termux/files/home/A137442/projects/Jev/jev-life`
+**源仓库（复刻来源）:** `../jev-2048`（与本仓库同级的目录）
+**新仓库:** `jev-life`（本仓库根目录）
 
 ---
 
@@ -66,7 +66,7 @@
 **Step 1: 建目录并初始化 git**
 
 ```bash
-cd /data/data/com.termux/files/home/A137442/projects/Jev
+cd ~/projects/Jev                                     # 换成你自己的项目根目录
 mkdir -p jev-life/src/{core,client,server,shared,test} jev-life/{tools,api,public}
 cd jev-life && git init -b main
 ```
@@ -241,7 +241,7 @@ clone-check/
 **Step 6: 装依赖**
 
 ```bash
-cd /data/data/com.termux/files/home/A137442/projects/Jev/jev-life
+cd ~/projects/Jev/jev-life
 node $(command -v npm) install
 ```
 
@@ -298,8 +298,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 **Step 1: 照搬两个安全工具**
 
 ```bash
-cp /data/data/com.termux/files/home/A137442/projects/Jev/jev-2048/tools/scan-secrets.ts tools/
-cp /data/data/com.termux/files/home/A137442/projects/Jev/jev-2048/tools/seal-key.ts tools/
+cp ../jev-2048/tools/scan-secrets.ts tools/
+cp ../jev-2048/tools/seal-key.ts tools/
 ```
 
 **改动点**：`seal-key.ts` 若引用了 `../src/server/seal.js`，本项目 seal.ts 稍后才建（T12），所以**先注释掉 T12 之前的调用或先放一个空的 seal.ts**。最省事的做法是在 T12 之前不跑 `seal-key.ts`，只把它放进仓库。
@@ -333,7 +333,7 @@ if (unused.length) {
  * 构建期检查：core/ 不得 import client/。
  *
  * 为什么需要它：
- * 跑分工具（tools/bench.ts）要在 Node 里跑同一个 core/。一旦 core/ 里的
+ * 跑分工具（tools/bench-step.ts）要在 Node 里跑同一个 core/。一旦 core/ 里的
  * 某个模块（哪怕间接）import 了 i18n 或 render，无头环境立刻崩 —— 而且崩在
  * 运行时，离真正的原因很远。
  *
@@ -347,7 +347,7 @@ if (unused.length) {
 **Step 4: 写 `start.sh`**（T13 之前先注释掉还不存在的步骤）
 
 ```bash
-#!/data/data/com.termux/files/usr/bin/bash
+#!/bin/sh
 #
 # 编译并启动 生命棋 × Jev。
 #
@@ -1824,7 +1824,7 @@ export function parseAnswers(channel: Channel, answers: Record<string, Answer>, 
 
 **Step 2: `tools/play.ts` —— 无头打完一整局**
 
-这是关卡一的验收物，同时是 `tools/bench.ts` 的雏形。要求：
+这是关卡一的验收物，同时是 `tools/bench-step.ts` 的雏形。要求：
 
 - 每回合**并发发出两个请求**（`Promise.all`），都基于演化前的棋盘
 - 逐步打印：棋盘 ASCII、`boardKey`、双方各自的 `probabilities` 前 5 名、`usage`
@@ -1941,7 +1941,7 @@ node tools/play.ts --size 6x6 --turns 10
 ## 完成 M1 的验证清单
 
 ```bash
-cd /data/data/com.termux/files/home/A137442/projects/Jev/jev-life
+cd ~/projects/Jev/jev-life
 
 # 单一入口（密钥扫描 → 分层检查 → DOM 检查 → 测试 → 编译 → 启动）
 ./start.sh
@@ -2256,7 +2256,7 @@ HTTP 429  0.386s
 
 这与「关思维链」那条汇到一处：关掉之后不仅快 5 倍、成功率 100%，**每次请求的 token 消耗还降到百分之一量级** —— 限流的暴露面跟着大幅收窄。
 
-**`tools/bench.ts` 的含义**：跑分规模受限于 token 配额而非请求数，所以
+**`tools/bench-step.ts` 的含义**：跑分规模受限于 token 配额而非请求数，所以
 - **默认关思维链**在跑分场景里几乎是必需的（否则几百局就会撞墙）
 - 统计页必须把「限流次数」单列（见上）
 - 具体配额没测（再压就得刻意打限流，不划算），按「跑一轮看撞不撞」实测推进
@@ -2492,7 +2492,7 @@ export interface DecisionResult {
 
 「正确率」在生命棋里**没有天然定义**——局面混沌，没有标准答案。所以只能二选一或并用：
 
-- **（主）对局胜负**：两个模型各执一方跑 N 局比胜率。零和博弈里，赢就是正确。这条 `bench.ts` 现成就能出
+- **（主）对局胜负**：两个模型各执一方跑 N 局比胜率。零和博弈里，赢就是正确。这条 `bench-step.ts` 现成就能出
 - **（辅）一致率**：在 noul 通道上，选一个慢而可靠的基准（全量 noul 的加权聚合？更深的搜索？），比各模型与它的一致程度
 
 **我倾向以对局胜负为主**：它是**契约性的**（有确定结果、不可争议），而一致率取决于你选谁当参考——那又把「参考者的偏见」引了回来，正是「凡混合则不可归因」要防的东西。

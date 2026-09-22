@@ -7,7 +7,7 @@
  * 2048 的 `buildState` / `buildQuestions` 住在 `main.ts` 且直接读输入框
  * （`$("ruleDesc").value`）。那条路径的后果是**无头环境跑不起来** ——
  * 跑分工具要么开一个假 DOM，要么把参数硬编码一份。本模块是纯函数：
- * 所有输入走参数，所有输出是普通对象，Node 里可以直接跑（`tools/bench.ts`
+ * 所有输入走参数，所有输出是普通对象，Node 里可以直接跑（`tools/bench-step.ts`
  * 依赖这一点，`tools/scan.ts` 用传递闭包守着它）。
  *
  * 文案因此**必须是直接的字符串常量**，不能走 i18n —— `core/` 一旦引到

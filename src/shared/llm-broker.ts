@@ -23,7 +23,7 @@
  * 1. **密钥不落地浏览器**（与其余几条上游同一条纪律）
  * 2. **客户端一行不用改** —— 翻译在服务端做掉之后，`llm-json` 后端对客户端而言
  *    与 `systemone` 完全一样，只是 base 不同。上层「分不出对面是谁」，
- *    这正是 `DESIGN.md` 第八节那条约束要的效果
+ *    这正是 `DESIGN.md` 第七节那条约束要的效果
  *
  * ═══ 实测依据（详见 docs/llm-backends.md）═══
  *
@@ -515,7 +515,7 @@ export const ANSWER_TOOL_NAME = "answer_questions";
 /**
  * 工具定义。
  *
- * ⚠ `parameters` 是**真的 JSON Schema**，不是 `DESIGN.md` 第八节那段简化示意 ——
+ * ⚠ `parameters` 是**真的 JSON Schema**，不是 `DESIGN.md` 第七节那段简化示意 ——
  * 后者是写给人读的（`{"answers":[{...}]}` 这种写法上游不认）。
  * 这里的形状与 `../llm-lab/batch.mjs` 逐字一致，因为那份是跑通过的。
  *

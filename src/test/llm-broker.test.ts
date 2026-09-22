@@ -309,7 +309,7 @@ test("★ effort=null 时提示词里也不会出现「不要展开推理过程�
      但不要声称它被验证过 —— 下面那条断言测的是**形状**，不是它的效用
 
    形状来自 `../llm-lab/batch.mjs`（实测脚本），不是推演出来的。
-   ⚠ 那份脚本里 `parameters` 是**真的 JSON Schema**，不是 `DESIGN.md` 第八节
+   ⚠ 那份脚本里 `parameters` 是**真的 JSON Schema**，不是 `DESIGN.md` 第七节
    那段简化示意 —— 后者是给人读的，直接发出去上游不认。 */
 
 /** 一次成功的工具调用回包 —— 形状照抄 batch.mjs 里真正收到的那个 */

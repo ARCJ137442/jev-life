@@ -10,7 +10,7 @@
  *   questions.flip_2_2.type: Invalid discriminator value.
  *   Expected 'boolean' | 'choice' | 'score'
  *
- * 修法是**服务端在转发前归一化**（DESIGN.md 第八节：中间那层必须真的兼容）——
+ * 修法是**服务端在转发前归一化**（DESIGN.md 第七节：中间那层必须真的兼容）——
  * 客户端只发语义（`noul` = 这是一道布尔题），由知道上游是谁的那一层翻译。
  *
  * ═══ 为什么这里有一条「读源码」的断言 ═══

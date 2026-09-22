@@ -59,6 +59,10 @@ Once deployed, both forms can reach the built-in "Free Trial" backends with no A
 (for Pages you must first set the `JEV_LIFE_REMOTE_BASE` repository variable — see [`DEPLOY.md`](DEPLOY.md)).
 Quota is limited; when it runs out the app prompts you to switch to your own key. See "Getting Started" below to run it locally instead.
 
+> ⚠️ **The "Free Trial" quota comes out of the original author's own pocket — please don't abuse it.**
+> Those endpoints are **public and unauthenticated** (deliberately — they are for trying the game out, not for batch runs).
+> The quota is metered in tokens and stops when it is gone; **for sustained or batch use, switch to the bring-your-own-key backends** — the whole point of this project is that any LLM can be plugged into it, and your own key comes with no quota anxiety.
+
 > 📝 **How does static hosting handle keys?** A static site has no serverless functions, so it **holds no key** — it calls the Vercel deployment above cross-origin, and the key stays inside that function process. The remote address comes from `REMOTE_PROXY_BASE` in `src/client/deploy.ts`, which is **an empty string by default, deliberately given no default value**: hard-coding a domain means other people's forks would silently burn the original author's quota. When it is empty, a static build simply hides those backends instead of firing off a batch of requests that are certain to 404.
 
 ---
@@ -85,7 +89,7 @@ npm install
 ▸ Scan for secrets…                        tools/scan-secrets.ts
 ▸ Check layering (core/ must not import client/)…  tools/scan.ts
 ▸ Check DOM id consistency…                tools/check-dom.ts
-▸ Run unit tests…                          447 tests
+▸ Run unit tests…
 ▸ Compile client (src/client → public/js)…
 ▸ Compile server (src/server → dist)…
 ▸ Start server…                            8787
@@ -135,7 +139,7 @@ node node_modules/typescript/bin/tsc -p tsconfig.api.json --noEmit
 node node_modules/typescript/bin/tsc -p tsconfig.test.json --noEmit
 node node_modules/typescript/bin/tsc -p tsconfig.tools.json --noEmit
 
-# Unit tests (447)
+# Unit tests (461)
 node node_modules/typescript/bin/tsc -p tsconfig.test.json
 node --test dist-test/test/*.test.js
 
@@ -204,7 +208,7 @@ jev-life
 │   ├── server
 │   │   ├── server.ts:      Local server + key proxy for three upstreams
 │   │   └── seal.ts:        Key sealing (AES-256-GCM)
-│   └── test:               22 test files, 447 cases
+│   └── test:               23 test files, 461 cases
 ├── api:                    Vercel Serverless Functions (three free-trial backends)
 ├── tools
 │   ├── _load.ts:           The single entry point for tools to reach core (checks staleness)

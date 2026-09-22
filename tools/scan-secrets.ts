@@ -32,14 +32,42 @@ const ROOT = join(HERE, "..");
  *
  * ⚠ 这里跳过的 `.git` 只指**仓库自己的** .git（在根目录）。
  * 嵌套在子目录里的 .git 是危险信号，必须报出来 —— 见 walk() 里的处理。
+ *
+ * ═══ 为什么构建产物**不**在跳过之列 ═══
+ *
+ * `dist/` `dist-test/` 曾经在这个集合里，理由是「它们只由 `src/` 编译而来，
+ * 而 `src/` 已经扫过了」。那条理由正是这个工具存在的意义所要否定的东西：
+ * 它的全部历史就是「假定某个东西干净 → 那个假定不成立 → 工具却报绿」。
+ * 「产物是派生的，所以它干净」是一次**推理**，不是一次**测量**。
+ *
+ * 而且同一条推理在 `public/js/` 上并不成立 —— 那也是编译产物（同样在
+ * `.gitignore` 里），却一直被扫，`pages.yml` 更是**专门把这一步排在编译之后**，
+ * 就为了扫到刚生成的 `public/js/`。跳过 `dist/` 而扫 `public/js/` 是自相矛盾的。
+ *
+ * 代价实测可忽略（本仓 210K + 885K，全量工作区扫描仍在 0.5s 量级），
+ * 所以这里选择**扫**：把「产物不可能有密钥」这条假定交还给测量去否定。
  */
-const SKIP_DIRS = new Set(["node_modules", "dist", "dist-test"]);
+const SKIP_DIRS = new Set(["node_modules"]);
 
 /** 已知的密钥形态。宁可多报，也不能漏。 */
 const PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "Vercel Gateway Key", re: /vck_[A-Za-z0-9_-]{20,}/g },
-  { name: "OpenRouter Key", re: /sk-or-v1-[a-f0-9]{32,}/g },
-  { name: "OpenAI Key", re: /sk-[A-Za-z0-9]{32,}/g },
+  // 十六进制补上大写：早期只认 [a-f0-9]，一串大写的 sk-or-v1-… 从规则底下走过去
+  { name: "OpenRouter Key", re: /sk-or-v1-[A-Fa-f0-9]{32,}/g },
+  // ⚠ 字符类里的 `-` 不能少。`sk-ant-api03-…`（Anthropic）、`sk-proj-…`（OpenAI 项目键）
+  // 在第 4 个字符就撞上连字符，而旧写法 `[A-Za-z0-9]` 到那里就断了 ——
+  // 于是**本仓库自己最常用的那个家族**（仓库里带着 Anthropic 兼容后端，
+  // 用户最可能自备的就是 sk-ant-）成了扫描器唯一完全看不见的一类。
+  //
+  // 开头那个 `\b` 是放宽字符类换来的**必需品**，不是修饰：`-` 一进字符类，
+  // 任何以 `sk` 结尾的单词只要拖一根长连字符尾巴就会被整条吞进来 ——
+  // 实测 `a-task-list-item-checkbox-with-a-very-long-name-here` 会命中。
+  // `\b` 要求 `sk` 前面不是单词字符，于是 `task-` 里的那个 `sk-` 被排除，
+  // 而真实的密钥（前面总归是引号 / `=` / 空格 / 冒号）一个都不受影响。
+  { name: "OpenAI / Anthropic Key", re: /\bsk-[A-Za-z0-9-]{32,}/g },
+  { name: "Google API Key", re: /AIza[0-9A-Za-z_-]{35}/g },
+  { name: "Groq Key", re: /gsk_[A-Za-z0-9]{20,}/g },
+  { name: "HuggingFace Token", re: /hf_[A-Za-z0-9]{20,}/g },
   { name: "GitHub Token", re: /gh[pousr]_[A-Za-z0-9]{30,}/g },
   { name: "AWS Access Key", re: /AKIA[0-9A-Z]{16}/g },
   { name: "Slack Token", re: /xox[abprs]-[A-Za-z0-9-]{10,}/g },
@@ -196,7 +224,7 @@ for (const h of hits) uniq.set(`${h.where}|${h.pattern}|${h.sample}`, h);
 
 console.error(`\n  ✗ 发现 ${uniq.size} 处疑似密钥：\n`);
 for (const h of uniq.values()) {
-  console.error(`      ${h.pattern.padEnd(20)} ${h.sample.padEnd(14)} ${h.where}`);
+  console.error(`      ${h.pattern.padEnd(23)} ${h.sample.padEnd(14)} ${h.where}`);
 }
 console.error(
   `\n    注意：扫描按字节进行，不区分文本与二进制 ——` +

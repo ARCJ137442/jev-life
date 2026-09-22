@@ -71,6 +71,11 @@ Jev 不生成文本。它接收一段「状态」与一组带类型的「问题�
 （Pages 那份要先在仓库变量里配好 `JEV_LIFE_REMOTE_BASE`，见 [`DEPLOY.md`](DEPLOY.md)）。
 额度有限，用尽时会提示切换到自己的 API 密钥 —— 也可用下面「快速开始」在本地跑。
 
+> ⚠️ **「免费试用」那份额度由原作者自费提供，请勿滥用。**
+> 这几条端点**公开且无鉴权**（刻意的 —— 它们给人试玩，不是给人跑批量）。
+> 额度按 token 计，用完即止；**持续或批量使用请切到「自备密钥」那几条后端** ——
+> 项目本身就是为「让任意 LLM 接进来」而设计的，自带密钥反而没有配额焦虑。
+
 > 📝 **纯静态托管怎么处理密钥？** 静态站点没有服务端函数，所以它**不持有密钥**，
 > 而是跨域调用 Vercel 上的那份部署，密钥仍在 Vercel 的函数进程里。
 > 远端地址由 `src/client/deploy.ts` 的 `REMOTE_PROXY_BASE` 决定 —— 它默认是**空字符串，刻意不给默认值**：
@@ -101,7 +106,7 @@ npm install
 ▸ 扫描密钥…                             tools/scan-secrets.ts
 ▸ 检查分层（core/ 不得 import client/）…  tools/scan.ts
 ▸ 检查 DOM id 一致性…                    tools/check-dom.ts
-▸ 运行单元测试…                          447 项
+▸ 运行单元测试…
 ▸ 编译客户端 (src/client → public/js)…
 ▸ 编译服务器 (src/server → dist)…
 ▸ 启动服务器…                            8787
@@ -156,7 +161,7 @@ node node_modules/typescript/bin/tsc -p tsconfig.api.json --noEmit
 node node_modules/typescript/bin/tsc -p tsconfig.test.json --noEmit
 node node_modules/typescript/bin/tsc -p tsconfig.tools.json --noEmit
 
-# 单元测试（447 项）
+# 单元测试（461 项）
 node node_modules/typescript/bin/tsc -p tsconfig.test.json
 node --test dist-test/test/*.test.js
 
@@ -229,7 +234,7 @@ jev-life
 │   ├── server
 │   │   ├── server.ts:      本机服务器 + 三条上游的密钥代理
 │   │   └── seal.ts:        密钥封存（AES-256-GCM）
-│   └── test:               22 个测试文件，447 条用例
+│   └── test:               23 个测试文件，461 条用例
 ├── api:                    Vercel Serverless Functions（三条免费试用后端）
 ├── tools
 │   ├── _load.ts:           工具拿 core 的唯一入口（并检查产物是否过期）
