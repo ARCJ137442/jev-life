@@ -621,7 +621,7 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Solo game: each turn only the player flips a cell, and Jev returns calibrated probabilities — no text generation, just whether to flip this cell",
     "nav.game": "Game",
     "nav.gameTitle":
-      "Board size, topology, end rules, opening — in Life Chess the rules are not self-evident, so anything changed here enters Jev's input and the probability distribution should change with it",
+      "Board size, topology, end rules, opening — in The Chess of Life the rules are not self-evident, so anything changed here enters Jev's input and the probability distribution should change with it",
     "nav.strategy": "Strategy",
     "nav.strategyTitle": "Context (what Jev sees) and rules (how an answer becomes a move)",
     "nav.apiTitle": "Which backend, and how to call it",
@@ -691,9 +691,9 @@ const DICT: Record<Lang, Record<string, string>> = {
 
     /* ---------- Game drawer ---------- */
     "game.noteInput":
-      "Life Chess: each turn you flip one cell, then the whole board advances one generation under B3/S23 — a dead cell with exactly 3 live neighbours is born, a live cell with 2 or 3 survives, everything else dies. Every intervention ripples through a chaotic system in ways you cannot fully predict.",
+      "The Chess of Life: each turn you flip one cell, then the whole board advances one generation under B3/S23 — a dead cell with exactly 3 live neighbours is born, a live cell with 2 or 3 survives, everything else dies. Every intervention ripples through a chaotic system in ways you cannot fully predict.",
     "game.desc":
-      "These are game-level settings: if the two sides disagreed on them it would not be the same game. Note that Life Chess is the opposite of 2048 — the rules are not self-evident, so anything changed here enters Jev's input and the distribution should change.",
+      "These are game-level settings: if the two sides disagreed on them it would not be the same game. Note that The Chess of Life is the opposite of 2048 — the rules are not self-evident, so anything changed here enters Jev's input and the distribution should change.",
     "game.boardSize": "Board size",
     "game.sizeHint":
       "The three presets each come with a calibrated set of parameters (rules, turn limit, opening library). Below them are free sizes — length and width are each 2–16, for when you want to try another size.",
@@ -1081,7 +1081,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "sesserr.noSize": "Missing board size",
     "sesserr.noBoard": "Missing board, or its row count does not match the size",
     "sesserr.noTurn": "Missing turn count",
-    "sesserr.notChess": "This archive does not belong to Life Chess (missing or wrong app marker)",
+    "sesserr.notChess": "This archive does not belong to The Chess of Life (missing or wrong app marker)",
 
     /* ---------- Salvage ---------- */
     "salv.turn": "Turn count reset to zero",
@@ -1140,7 +1140,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "boot.missingDom": "Startup self-check failed: {n} element(s) are missing from index.html — {list}",
     "boot.missingDomHint":
       "\nThis usually means HTML and TS are out of sync (an id changed on one side only).\nRun node tools/check-dom.ts to locate it before building.",
-    "boot.failedBody": "Life Chess failed to start:\n\n{msg}",
+    "boot.failedBody": "The Chess of Life failed to start:\n\n{msg}",
 
     /* ---------- Developer console ---------- */
     "dev.bootFail": "[Life×Jev] Startup failed:",

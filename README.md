@@ -5,9 +5,10 @@
 
 > **English readers:** full English documentation → [**README.en.md**](README.en.md)
 >
-> An **experimental game**: write a new ruleset, then immediately watch it be played. "Life Chess" is its first
-> ruleset — Conway's Game of Life plus turn-based intervention, where both sides flip one cell and the board then
-> evolves. **Nobody has played it before**, so there is no opening theory and no human strong play to imitate, and
+> An **experimental game**: write a new ruleset, then immediately watch it be played. **The Chess of Life** — named
+> after Conway's *The Game of Life* — is its first ruleset: turn-based intervention on a Life board, where both sides
+> flip one cell and the board then evolves. **Nobody has played it before**, so there is no opening theory and no
+> human strong play to imitate, and
 > [TypeSafe AI's Jev](https://www.typesafe.ai/) is both the tool for exploring the rules and their **first player** —
 > one typed `boolean` per legal cell, all in a single request, with **no heuristic fallback**. Because the rules are
 > not self-evident they render from editable templates with auto-filled placeholders: rewrite a rule, re-ask.

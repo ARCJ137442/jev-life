@@ -183,7 +183,7 @@ node tools/play.ts --size 8x8 --turns 4
 ### Disclaimer
 
 This is a **third-party lab bench** for Jev. It is not affiliated with TypeSafe AI.
-The rules of Conway's Game of Life are in the public domain; this project merely borrows them as a decision scenario with a well-defined objective. The "Chess of Life" variant layered on top of them belongs to this repository.
+The rules of Conway's Game of Life are in the public domain; this project merely borrows them as a decision scenario with a well-defined objective. **The Chess of Life** — the variant layered on top of them, named after Conway's *The Game of Life* — belongs to this repository.
 
 ### Module architecture
 
