@@ -45,6 +45,10 @@ echo "▸ 检查 DOM id 一致性…"
 node tools/check-dom.ts || { echo "✗ HTML 与 TS 不同步，已中止启动"; exit 1; }
 
 echo "▸ 运行单元测试…"
+# ⚠ 下面两条与 `package.json` 的 `test` 脚本**是同一件事**，改了记得两边都改。
+#   这里不能直接调 `npm test` —— Termux 下 npm 的 shebang 指向不存在的
+#   /usr/bin/env（见文件头的说明），所以只能把命令抄一遍。
+#   ci.yml / pages.yml 走的是 `npm test`，它们不抄。
 node "$TSC" -p tsconfig.test.json
 # api/ 的产物：normalize.test.ts 测的是编译后的入口（与 Vercel 加载的是同一份）。
 # 少了这一步，那条用例会因为找不到 dist-api/ 而红 —— 而它正是用来抓

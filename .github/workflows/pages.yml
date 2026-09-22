@@ -46,9 +46,12 @@ jobs:
         run: node tools/scan.ts
 
       - name: 单元测试
-        run: |
-          node node_modules/typescript/bin/tsc -p tsconfig.test.json
-          node --test dist-test/test/*.test.js
+        # ★ 走 `npm test` 而不是把命令抄一遍：这条序列在**四处**出现过
+        #   （package.json / ci.yml / pages.yml / start.sh），而「抄一遍」
+        #   正是漏掉其中一处的成因 —— 加 api/ 的编译那一步时，这份就被漏了，
+        #   于是 Pages 的构建在单元测试上红了一次。
+        #   命令的**唯一来源**是 package.json 的 `test`。
+        run: npm test
 
       - name: 注入远端代理地址
         # ★ 仓库里的 REMOTE_PROXY_BASE 默认是**空字符串** —— 刻意不给默认值。
