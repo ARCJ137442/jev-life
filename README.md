@@ -5,11 +5,14 @@
 
 > **English readers:** full English documentation → [**README.en.md**](README.en.md)
 >
-> A web lab that hands **every move in a two-player "Life Chess"** to [TypeSafe AI's Jev](https://www.typesafe.ai/) —
-> a System One model that returns typed decisions with calibrated probabilities instead of generated text. Each turn
-> both sides flip one cell of a Conway board, then it evolves; every flip is a single boolean question with **no
-> heuristic fallback**, so the board stays attributable to Jev. Alongside it sits a **Jev-compatible broker** that can
-> wrap any OpenAI- or Anthropic-compatible LLM into a Jev backend, so the two can be measured on the same board.
+> An **experimental game**: write a new ruleset, then immediately watch it be played. "Life Chess" is its first
+> ruleset — Conway's Game of Life plus turn-based intervention, where both sides flip one cell and the board then
+> evolves. **Nobody has played it before**, so there is no opening theory and no human strong play to imitate, and
+> [TypeSafe AI's Jev](https://www.typesafe.ai/) is both the tool for exploring the rules and their **first player** —
+> one typed `boolean` per legal cell, all in a single request, with **no heuristic fallback**. Because the rules are
+> not self-evident they render from editable templates with auto-filled placeholders: rewrite a rule, re-ask.
+> Alongside it sits a **Jev-compatible broker** that wraps any OpenAI- or Anthropic-compatible LLM into a Jev backend,
+> so the two can play the same board.
 
 <!-- 📝徽章安排参考：https://daily.dev/blog/readme-badges-github-best-practices#organizing-badges-in-your-readme -->
 
@@ -36,15 +39,24 @@
 
 ## 简介
 
-一个用 [TypeSafe AI 的「Jev」](https://www.typesafe.ai/) 决策模型作为「**生命棋**」决策引擎的网页实验台，全 [TypeScript](https://www.typescriptlang.org/) 编写。
+一个**实验性游戏**：为「**写一套新规则，然后立刻看它能被怎样玩**」而做的网页实验台，全 [TypeScript](https://www.typescriptlang.org/) 编写。
 
-「生命棋」= 康威生命游戏 + 回合制干预：**双方同时各翻一格，然后演化一代**。
+「生命棋」是它的第一份规则 = 康威生命游戏 + 回合制干预：**双方同时各翻一格，然后演化一代**。
 生之执把棋盘往「活」推，死之执往「死」推；活细胞占比连续越界若干回合者获胜。
-规则本身、胜负线与开局库都由本仓库定义。
+规则本身、胜负线与开局库都由本仓库定义 —— 而且**规则怎么写、胜负线画在哪、开局长什么样，都是你可以改的**。
 
-Jev 不生成文本。它接收一段「状态」与一组带类型的「问题」，返回**带校准概率的结构化决策**。
-本项目把每一次翻格都交给它来决策，并把它的「概率分布」「置信度」「延迟」「token 消耗」全部摊开在界面上 ——
-目的不是做一个好玩的棋，而是让「决策模型如何在全新规则下适应」这件事变得**可见、可调、可测量**。
+[TypeSafe AI 的「Jev」](https://www.typesafe.ai/) 在这里有两个身份：**探索规则的工具**，以及每一套新规则的**第一个玩家**。
+它不生成文本：接收一段「状态」与一组带类型的「问题」，返回**带校准概率的结构化决策**。
+本项目把每一次翻格都交给它决策，并把它的「概率分布」「置信度」「延迟」「token 消耗」全部摊开在界面上。
+
+> ★ **为什么这里需要一个「第一个玩家」**
+>
+> 任何原创游戏在被玩明白之前，**都不存在人类先例** —— 没有棋谱、没有攻略、没有高手可模仿。
+> 一套刚被写出来的规则，最缺的恰恰是「有人真的按它走一遍」。
+> Jev 从**规则本身**上手，而「规则该怎么讲给它听」也是可编辑的 ——
+> 于是一套新规则**能不能玩、有没有讲清楚**，在一局之内就能看到。
+
+让「决策模型如何在全新规则下适应」变得**可见、可调、可测量**，是这件事在本项目里的落点。
 
 它是 [`jev-2048`](https://github.com/ARCJ137442/jev-2048) 的**姊妹项目，不是它的分支** —— 骨架同源，玩法与测量的东西完全不同。
 相对那一个，它有**两件可以独立取用的增量**：

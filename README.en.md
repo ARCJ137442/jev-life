@@ -28,15 +28,23 @@ Development status:
 
 ## Introduction
 
-A browser-based lab bench that uses [TypeSafe AI's "Jev"](https://www.typesafe.ai/) decision model as the decision engine for **The Chess of Life**. Written entirely in [TypeScript](https://www.typescriptlang.org/).
+An **experimental game**: a browser-based lab bench for "**write a new ruleset, then immediately watch it be played**", written entirely in [TypeScript](https://www.typescriptlang.org/).
 
-"The Chess of Life" = Conway's Game of Life + turn-based intervention: **both sides flip one cell simultaneously, then the board evolves once**.
+"The Chess of Life" is its first ruleset = Conway's Game of Life + turn-based intervention: **both sides flip one cell simultaneously, then the board evolves once**.
 Life pushes the board towards "alive", Death pushes it towards "dead"; whichever side keeps the live-cell ratio past its line for several consecutive turns wins.
-The rules themselves, the win lines and the opening library are all defined in this repository.
+The rules themselves, the win lines and the opening library are all defined in this repository — and **how the rules are worded, where the win lines sit, and what the opening looks like are all yours to change**.
 
-Jev does not generate text. It takes a piece of **state** plus a set of **typed questions**, and returns **structured decisions with calibrated probabilities**.
+[TypeSafe AI's "Jev"](https://www.typesafe.ai/) wears two hats here: the **tool for exploring the rules**, and the **first player** of every new ruleset.
+It does not generate text. It takes a piece of **state** plus a set of **typed questions**, and returns **structured decisions with calibrated probabilities**.
 This project hands every flip to it, and lays its probability distribution, confidence, latency and token cost out on screen.
-The point is not to build a fun game — it is to make "how a decision model adapts to entirely new rules" **visible, tunable, and measurable**.
+
+> ★ **Why a "first player" is needed here**
+>
+> Before any original game is understood, **there is no human precedent** — no opening theory, no guides, no strong play to imitate.
+> What a freshly written ruleset lacks most is exactly "someone who actually walks it once".
+> Jev starts from **the rules themselves**, and how those rules are told to it is editable too — so **whether a new ruleset is playable, and whether it was explained clearly**, shows up within a single game.
+
+Making "how a decision model adapts to entirely new rules" **visible, tunable, and measurable** is what that amounts to in this repository.
 
 It is the **sister project of [`jev-2048`](https://github.com/ARCJ137442/jev-2048), not a fork of it** — same skeleton, completely different game and measurements.
 Compared to that one, it carries **two increments you can lift out on their own**:
